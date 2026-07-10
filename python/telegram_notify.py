@@ -92,14 +92,19 @@ def _send_sync(
             raise urllib.error.HTTPError(url, resp.status, "non-200 from Telegram", resp.headers, None)
 
 
-def trade_keyboard_markup(symbol: str) -> dict:
+def trade_keyboard_buttons(symbol: str) -> list[list[str]]:
+    """Same layout as python-telegram-bot ReplyKeyboardMarkup keyboard=[[...]]."""
     sym = (symbol or "XAUUSD").strip().upper()
+    return [[f"{sym} BUY", f"{sym} - SELL", "CLOSE ALL"]]
+
+
+def trade_keyboard_markup(symbol: str) -> dict:
+    """ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)."""
+    keyboard = trade_keyboard_buttons(symbol)
     return {
-        "keyboard": [
-            [{"text": f"{sym} BUY"}, {"text": f"{sym} - SELL"}],
-            [{"text": "CLOSE ALL"}],
-        ],
+        "keyboard": [[{"text": label} for label in row] for row in keyboard],
         "resize_keyboard": True,
+        "one_time_keyboard": False,
     }
 
 
@@ -136,13 +141,12 @@ async def send_reply(
 
 async def setup_trade_keyboard(bot_token: str, chat_id: str, symbol: str) -> None:
     sym = (symbol or "XAUUSD").strip().upper()
-    text = "\n".join([
-        "⌨️ Bàn phím lệnh",
-        trade_command_hint(sym),
-        "Chạm nút hoặc gõ lệnh để giao dịch",
-    ])
     await asyncio.to_thread(
-        _send_sync, bot_token, chat_id, text, trade_keyboard_markup(sym)
+        _send_sync,
+        bot_token,
+        chat_id,
+        "Chọn thao tác:",
+        trade_keyboard_markup(sym),
     )
 
 
@@ -165,8 +169,7 @@ async def send_test(bot_token: str, chat_id: str, symbol: str = "XAUUSD") -> Non
         "MetaTrader Dashboard",
         "Kết nối Telegram thành công ✅",
         "",
-        "Lệnh điều khiển:",
-        trade_command_hint(sym),
+        "Chọn thao tác:",
     ])
     await asyncio.to_thread(
         _send_sync, bot_token, chat_id, text, trade_keyboard_markup(sym)
