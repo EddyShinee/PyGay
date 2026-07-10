@@ -102,10 +102,28 @@ void TryConnect()
    if(g_socket.Connect(InpHost, InpPort))
    {
       Print("SocketBridgeEA: connected to ", InpHost, ":", InpPort);
+      SendHello();
       SendSymbolList();
    }
    else
       Print("SocketBridgeEA: connect failed, will retry");
+}
+
+//+------------------------------------------------------------------+
+//| Identify which MT5 account this connection belongs to - sent      |
+//| once, first, right after connecting. Everything else in the       |
+//| protocol is unchanged; Python routes by account_id from here on   |
+//| using the socket connection itself, not per-message fields.       |
+//+------------------------------------------------------------------+
+void SendHello()
+{
+   CJson msg;
+   msg.AddString("type", "hello");
+   msg.AddInt("account_id", AccountInfoInteger(ACCOUNT_LOGIN));
+   msg.AddString("broker", AccountInfoString(ACCOUNT_COMPANY));
+   msg.AddString("name", AccountInfoString(ACCOUNT_NAME));
+   msg.AddString("currency", AccountInfoString(ACCOUNT_CURRENCY));
+   g_socket.Send(msg.Serialize() + "\n");
 }
 
 //+------------------------------------------------------------------+

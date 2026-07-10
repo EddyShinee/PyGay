@@ -2,12 +2,17 @@
 needing a real MetaTrader terminal.
 
 Connects to the Python server as a TCP client (exactly like the real EA),
-streams a random-walk tick for one symbol, maintains fake open positions,
-and answers open_order/close_position/close_all/modify_position/get_positions
-the same way SocketBridgeEA.mq5 is expected to.
+sends "hello" to identify its account, streams a random-walk tick for one
+symbol, maintains fake open positions, and answers
+open_order/close_position/close_all/modify_position/get_positions the same
+way SocketBridgeEA.mq5 is expected to.
 
-Run: python3 tools/fake_ea.py   (with python/main.py already running)
+Run: python3 tools/fake_ea.py --account 1001   (with python/main.py already running)
+
+Run several at once with different --account values to test the
+multi-account dashboard - they all connect to the same port 9090.
 """
+import argparse
 import asyncio
 import itertools
 import json
@@ -118,15 +123,20 @@ class FakeEA:
         }
 
 
-async def main() -> None:
+async def main(account_id: str, ticket_start: int) -> None:
     reader, writer = await asyncio.open_connection(HOST, PORT)
     ea = FakeEA()
-    log.info("connected to %s:%s", HOST, PORT)
+    ea.next_ticket = itertools.count(ticket_start)
+    log.info("connected to %s:%s as account %s", HOST, PORT, account_id)
 
     async def send(msg: dict) -> None:
         writer.write((json.dumps(msg) + "\n").encode())
         await writer.drain()
 
+    await send({
+        "type": "hello", "account_id": account_id,
+        "broker": "FakeBroker Ltd", "name": f"Demo {account_id}", "currency": "USD",
+    })
     await send({"type": "symbols", "list": ",".join(FAKE_SYMBOLS)})
 
     async def send_snapshot() -> None:
@@ -233,4 +243,8 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--account", default="1001", help="fake MT5 account login/id")
+    parser.add_argument("--ticket-start", type=int, default=1000, help="starting ticket number")
+    args = parser.parse_args()
+    asyncio.run(main(args.account, args.ticket_start))

@@ -34,6 +34,7 @@
   button.sell-btn { background: var(--series-sell); font-weight: 600; padding: 7px 20px; }
   button.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
   button:hover { filter: brightness(1.1); }
+  button:disabled { opacity: .45; cursor: not-allowed; filter: none; }
   input, select { background: #0f1420; border: 1px solid var(--border); color: var(--text);
                   border-radius: 6px; padding: 6px 8px; font-size: 13px; }
   table { width: 100%; border-collapse: collapse; }
@@ -78,6 +79,22 @@
   #toast.error { border-color: var(--red); color: var(--red); }
   #toast.show { display: block; }
   .empty { color: var(--muted); text-align: center; padding: 20px; }
+
+  /* Overview (accounts list) */
+  .detail-header { display: flex; align-items: center; gap: 12px; padding: 12px 20px;
+                    border-bottom: 1px solid var(--border); max-width: 1100px; margin: 0 auto; }
+  .detail-header #detailTitle { font-weight: 600; }
+  .detail-header .status-dot { margin-right: 4px; }
+  .accounts-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+  .account-card { background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 10px;
+                  padding: 14px; cursor: pointer; transition: border-color .15s; }
+  .account-card:hover { border-color: var(--accent); }
+  .account-card-top { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+  .account-card-title { font-weight: 600; }
+  .account-card-broker { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+  .status-dot.online { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .status-dot.offline { background: var(--muted); }
 </style>
 </head>
 <body>
@@ -87,103 +104,122 @@
   <span id="status" class="down">Đang kết nối...</span>
 </header>
 
-<main>
-  <div class="panel">
-    <div class="stat-grid">
-      <div class="stat-tile"><span class="stat-label">Balance</span><span class="stat-value" id="acc_balance">-</span></div>
-      <div class="stat-tile"><span class="stat-label">Equity</span><span class="stat-value" id="acc_equity">-</span></div>
-      <div class="stat-tile"><span class="stat-label">Margin</span><span class="stat-value" id="acc_margin">-</span></div>
-      <div class="stat-tile"><span class="stat-label">Free Margin</span><span class="stat-value" id="acc_margin_free">-</span></div>
-      <div class="stat-tile"><span class="stat-label">Margin Level</span><span class="stat-value" id="acc_margin_level">-</span></div>
-      <div class="stat-tile"><span class="stat-label">Lãi/lỗ trôi nổi</span><span class="stat-value" id="acc_floating">-</span></div>
-      <div class="stat-tile"><span class="stat-label buy">Lệnh BUY đang mở</span><span class="stat-value" id="acc_buy">0</span></div>
-      <div class="stat-tile"><span class="stat-label sell">Lệnh SELL đang mở</span><span class="stat-value" id="acc_sell">0</span></div>
+<div id="overviewView">
+  <main style="max-width:900px">
+    <div class="panel">
+      <div id="accountsList" class="accounts-list"></div>
+      <div id="accountsEmpty" class="empty" style="display:none">
+        Chưa có tài khoản MT5 nào kết nối. Gắn EA vào chart và đợi trong giây lát.
+      </div>
     </div>
+  </main>
+</div>
+
+<div id="detailView" style="display:none">
+  <div class="detail-header">
+    <button class="ghost" onclick="showOverview()">&larr; Tất cả tài khoản</button>
+    <span class="status-dot" id="detailDot"></span>
+    <span id="detailTitle"></span>
   </div>
 
-  <div class="panel">
-    <div class="toolbar" style="margin-bottom:10px">
-      <label style="font-size:12px;color:var(--muted)">Lệnh nhanh</label>
-      <select id="q_symbol" style="width:110px"></select>
-      <input id="q_lot" type="number" step="0.01" min="0.01" value="0.01" style="width:80px" placeholder="Lot" />
-      <button class="buy-btn" onclick="quickOrder('BUY')">BUY</button>
-      <button class="sell-btn" onclick="quickOrder('SELL')">SELL</button>
-      <span style="flex:1"></span>
-      <label style="font-size:12px;color:var(--muted)">Magic Number</label>
-      <input id="magicInput" type="number" step="1" style="width:110px" />
-      <button class="secondary" onclick="saveMagic()">Lưu</button>
-      <span id="magicCurrent" style="font-size:12px;color:var(--muted)"></span>
+  <main>
+    <div class="panel">
+      <div class="stat-grid">
+        <div class="stat-tile"><span class="stat-label">Balance</span><span class="stat-value" id="acc_balance">-</span></div>
+        <div class="stat-tile"><span class="stat-label">Equity</span><span class="stat-value" id="acc_equity">-</span></div>
+        <div class="stat-tile"><span class="stat-label">Margin</span><span class="stat-value" id="acc_margin">-</span></div>
+        <div class="stat-tile"><span class="stat-label">Free Margin</span><span class="stat-value" id="acc_margin_free">-</span></div>
+        <div class="stat-tile"><span class="stat-label">Margin Level</span><span class="stat-value" id="acc_margin_level">-</span></div>
+        <div class="stat-tile"><span class="stat-label">Lãi/lỗ trôi nổi</span><span class="stat-value" id="acc_floating">-</span></div>
+        <div class="stat-tile"><span class="stat-label buy">Lệnh BUY đang mở</span><span class="stat-value" id="acc_buy">0</span></div>
+        <div class="stat-tile"><span class="stat-label sell">Lệnh SELL đang mở</span><span class="stat-value" id="acc_sell">0</span></div>
+      </div>
     </div>
-    <div class="toolbar">
-      <button onclick="openOrderModal()">+ Thêm lệnh</button>
-      <button class="secondary" onclick="refreshPositions()">Làm mới</button>
-      <span style="flex:1"></span>
-      <button class="secondary" onclick="closeAll('profit')">Đóng tất cả lệnh lãi</button>
-      <button class="secondary" onclick="closeAll('loss')">Đóng tất cả lệnh lỗ</button>
-      <button class="danger" onclick="closeAll('all')">Đóng tất cả</button>
-    </div>
-    <div class="toolbar" style="margin-top:10px">
-      <label style="font-size:12px;color:var(--muted)">Đóng tất cả khi tổng lãi/lỗ</label>
-      <select id="thresholdOp"><option value=">=">&ge;</option><option value="<=">&le;</option></select>
-      <input id="thresholdAmount" type="number" step="0.01" placeholder="USD" style="width:100px" />
-      <button class="secondary" onclick="closeByThreshold()">Kiểm tra &amp; đóng</button>
-    </div>
-  </div>
 
-  <div class="panel">
-    <div id="summary">
-      <span>Số lệnh: <b id="posCount">0</b></span>
-      <span>Tổng lãi/lỗ: <b id="totalProfit">0.00</b></span>
-      <span style="flex:1"></span>
-      <input id="ticketFilter" type="text" placeholder="Lọc theo ticket..." style="width:160px" oninput="renderPositions()" />
+    <div class="panel">
+      <div class="toolbar" style="margin-bottom:10px">
+        <label style="font-size:12px;color:var(--muted)">Lệnh nhanh</label>
+        <select id="q_symbol" style="width:110px"></select>
+        <input id="q_lot" type="number" step="0.01" min="0.01" value="0.01" style="width:80px" placeholder="Lot" />
+        <button class="buy-btn needs-connection" onclick="quickOrder('BUY')">BUY</button>
+        <button class="sell-btn needs-connection" onclick="quickOrder('SELL')">SELL</button>
+        <span style="flex:1"></span>
+        <label style="font-size:12px;color:var(--muted)">Magic Number</label>
+        <input id="magicInput" type="number" step="1" style="width:110px" />
+        <button class="secondary needs-connection" onclick="saveMagic()">Lưu</button>
+        <span id="magicCurrent" style="font-size:12px;color:var(--muted)"></span>
+      </div>
+      <div class="toolbar">
+        <button class="needs-connection" onclick="openOrderModal()">+ Thêm lệnh</button>
+        <button class="secondary needs-connection" onclick="refreshPositions()">Làm mới</button>
+        <span style="flex:1"></span>
+        <button class="secondary needs-connection" onclick="closeAll('profit')">Đóng tất cả lệnh lãi</button>
+        <button class="secondary needs-connection" onclick="closeAll('loss')">Đóng tất cả lệnh lỗ</button>
+        <button class="danger needs-connection" onclick="closeAll('all')">Đóng tất cả</button>
+      </div>
+      <div class="toolbar" style="margin-top:10px">
+        <label style="font-size:12px;color:var(--muted)">Đóng tất cả khi tổng lãi/lỗ</label>
+        <select id="thresholdOp"><option value=">=">&ge;</option><option value="<=">&le;</option></select>
+        <input id="thresholdAmount" type="number" step="0.01" placeholder="USD" style="width:100px" />
+        <button class="secondary needs-connection" onclick="closeByThreshold()">Kiểm tra &amp; đóng</button>
+      </div>
     </div>
-    <div style="overflow-x:auto; margin-top:10px">
-      <table>
-        <thead>
-          <tr>
-            <th>Ticket</th><th>Symbol</th><th>Volume</th>
-            <th class="sortable" onclick="setSort('price_open')">Giá vào<span class="sort-arrow" id="sort_price_open"></span></th>
-            <th class="sortable" onclick="setSort('time_open')">Thời gian<span class="sort-arrow" id="sort_time_open"></span></th>
-            <th>SL</th><th>TP</th>
-            <th class="sortable" onclick="setSort('profit')">Profit<span class="sort-arrow" id="sort_profit"></span></th>
-            <th>Sửa SL/TP</th><th></th>
-          </tr>
-        </thead>
-        <tbody id="positionsBody"></tbody>
-      </table>
-      <div id="emptyMsg" class="empty" style="display:none">Chưa có lệnh nào đang mở.</div>
-    </div>
-  </div>
 
-  <div class="panel">
-    <div class="toolbar">
-      <label style="font-size:12px;color:var(--muted)">Insight theo</label>
-      <select id="insightBucket" onchange="loadInsights()">
-        <option value="minute">Phút</option>
-        <option value="hour">Giờ</option>
-        <option value="day" selected>Ngày</option>
-        <option value="month">Tháng</option>
-        <option value="year">Năm</option>
-      </select>
-      <span style="flex:1"></span>
-      <span id="summaryLine" style="font-size:12px;color:var(--muted)"></span>
+    <div class="panel">
+      <div id="summary">
+        <span>Số lệnh: <b id="posCount">0</b></span>
+        <span>Tổng lãi/lỗ: <b id="totalProfit">0.00</b></span>
+        <span style="flex:1"></span>
+        <input id="ticketFilter" type="text" placeholder="Lọc theo ticket..." style="width:160px" oninput="renderPositions()" />
+      </div>
+      <div style="overflow-x:auto; margin-top:10px">
+        <table>
+          <thead>
+            <tr>
+              <th>Ticket</th><th>Symbol</th><th>Volume</th>
+              <th class="sortable" onclick="setSort('price_open')">Giá vào<span class="sort-arrow" id="sort_price_open"></span></th>
+              <th class="sortable" onclick="setSort('time_open')">Thời gian<span class="sort-arrow" id="sort_time_open"></span></th>
+              <th>SL</th><th>TP</th>
+              <th class="sortable" onclick="setSort('profit')">Profit<span class="sort-arrow" id="sort_profit"></span></th>
+              <th>Sửa SL/TP</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="positionsBody"></tbody>
+        </table>
+        <div id="emptyMsg" class="empty" style="display:none">Chưa có lệnh nào đang mở.</div>
+      </div>
     </div>
-    <div style="overflow-x:auto; margin-top:10px">
-      <table>
-        <thead>
-          <tr>
-            <th>Thời gian</th>
-            <th class="buy">BUY (lệnh)</th><th>BUY lãi/lỗ</th>
-            <th class="sell">SELL (lệnh)</th><th>SELL lãi/lỗ</th>
-            <th>Tổng</th>
-          </tr>
-        </thead>
-        <tbody id="insightBody"></tbody>
-      </table>
-      <div id="insightEmpty" class="empty" style="display:none">Chưa có lệnh nào đã đóng.</div>
+
+    <div class="panel">
+      <div class="toolbar">
+        <label style="font-size:12px;color:var(--muted)">Insight theo</label>
+        <select id="insightBucket" onchange="loadInsights()">
+          <option value="minute">Phút</option>
+          <option value="hour">Giờ</option>
+          <option value="day" selected>Ngày</option>
+          <option value="month">Tháng</option>
+          <option value="year">Năm</option>
+        </select>
+        <span style="flex:1"></span>
+        <span id="summaryLine" style="font-size:12px;color:var(--muted)"></span>
+      </div>
+      <div style="overflow-x:auto; margin-top:10px">
+        <table>
+          <thead>
+            <tr>
+              <th>Thời gian</th>
+              <th class="buy">BUY (lệnh)</th><th>BUY lãi/lỗ</th>
+              <th class="sell">SELL (lệnh)</th><th>SELL lãi/lỗ</th>
+              <th>Tổng</th>
+            </tr>
+          </thead>
+          <tbody id="insightBody"></tbody>
+        </table>
+        <div id="insightEmpty" class="empty" style="display:none">Chưa có lệnh nào đã đóng.</div>
+      </div>
     </div>
-  </div>
-</main>
+  </main>
+</div>
 
 <div class="modal-backdrop" id="orderModal">
   <div class="modal">
@@ -266,7 +302,7 @@ async function api(path, method, body) {
 }
 
 function fmt(n, digits) {
-  return Number(n).toFixed(digits === undefined ? 2 : digits);
+  return Number(n || 0).toFixed(digits === undefined ? 2 : digits);
 }
 
 function fmtTime(ts) {
@@ -276,6 +312,97 @@ function fmtTime(ts) {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+/* ---------- Router: overview <-> per-account detail view ---------- */
+let currentAccountId = null;
+let currentAccountConnected = false;
+let accountsCache = [];
+let wsPositions = null, wsAccount = null, wsSymbols = null;
+
+function closeDetailSockets() {
+  for (const ws of [wsPositions, wsAccount, wsSymbols]) {
+    if (ws) { ws.onclose = null; ws.onmessage = null; ws.close(); }
+  }
+  wsPositions = wsAccount = wsSymbols = null;
+}
+
+function showOverview() {
+  currentAccountId = null;
+  closeDetailSockets();
+  document.getElementById('overviewView').style.display = 'block';
+  document.getElementById('detailView').style.display = 'none';
+  renderAccountsList();
+}
+
+function showAccount(accountId) {
+  currentAccountId = accountId;
+  document.getElementById('overviewView').style.display = 'none';
+  document.getElementById('detailView').style.display = 'block';
+  closeDetailSockets();
+  connectPositionsWs();
+  connectAccountWs();
+  connectSymbolsWs();
+  loadInsights();
+  updateDetailHeader();
+}
+
+function updateDetailHeader() {
+  const a = accountsCache.find(x => x.account_id === currentAccountId);
+  document.getElementById('detailTitle').textContent =
+    a ? `${a.name || a.account_id} · #${a.account_id} · ${a.broker || ''}` : `#${currentAccountId}`;
+  document.getElementById('detailDot').className = 'status-dot ' + (currentAccountConnected ? 'online' : 'offline');
+}
+
+function updateActionAvailability() {
+  document.querySelectorAll('.needs-connection').forEach(el => { el.disabled = !currentAccountConnected; });
+  renderPositions();
+}
+
+function renderAccountsList() {
+  document.getElementById('accountsEmpty').style.display = accountsCache.length ? 'none' : 'block';
+  document.getElementById('accountsList').innerHTML = accountsCache.map(a => `
+    <div class="account-card" onclick="showAccount('${a.account_id}')">
+      <div class="account-card-top">
+        <span class="status-dot ${a.connected ? 'online' : 'offline'}"></span>
+        <span class="account-card-title">${a.name || a.account_id}</span>
+      </div>
+      <div class="account-card-broker">#${a.account_id} · ${a.broker || ''}</div>
+      <div class="stat-grid">
+        <div class="stat-tile"><span class="stat-label">Balance</span><span class="stat-value">${fmt(a.balance)}</span></div>
+        <div class="stat-tile"><span class="stat-label">Equity</span><span class="stat-value">${fmt(a.equity)}</span></div>
+        <div class="stat-tile"><span class="stat-label">Lãi/lỗ trôi nổi</span><span class="stat-value ${(a.floating_profit || 0) >= 0 ? 'profit-pos' : 'profit-neg'}">${fmt(a.floating_profit)}</span></div>
+        <div class="stat-tile"><span class="stat-label">Lệnh đang mở</span><span class="stat-value">${a.open_count || 0}</span></div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function connectAccountsWs() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/accounts`);
+  ws.onopen = () => { statusEl.textContent = 'Đã kết nối server'; statusEl.className = 'up'; };
+  ws.onclose = () => {
+    statusEl.textContent = 'Mất kết nối server, đang thử lại...'; statusEl.className = 'down';
+    setTimeout(connectAccountsWs, 2000);
+  };
+  ws.onerror = () => ws.close();
+  ws.onmessage = (ev) => {
+    accountsCache = JSON.parse(ev.data);
+    if (currentAccountId === null) {
+      renderAccountsList();
+    } else {
+      const a = accountsCache.find(x => x.account_id === currentAccountId);
+      if (a) {
+        currentAccountConnected = a.connected;
+        updateDetailHeader();
+        updateActionAvailability();
+      }
+    }
+  };
+}
+connectAccountsWs();
+showOverview();
+
+/* ---------- Positions table: sort/filter/render ---------- */
 let lastPositions = [];
 let lastTotalProfit = 0;
 let sortField = null;
@@ -323,6 +450,7 @@ function renderPositions() {
   updateSortIndicators();
 
   emptyEl.style.display = rows.length ? 'none' : 'block';
+  const dis = currentAccountConnected ? '' : 'disabled';
   bodyEl.innerHTML = rows.map(p => `
     <tr data-ticket="${p.ticket}">
       <td>${p.ticket}</td>
@@ -334,18 +462,18 @@ function renderPositions() {
       <td>${fmt(p.tp, 5)}</td>
       <td class="${p.profit >= 0 ? 'profit-pos' : 'profit-neg'}">${fmt(p.profit + p.swap)}</td>
       <td>
-        <input class="sltp-input" type="number" step="0.00001" value="${p.sl || ''}" placeholder="SL" data-field="sl" />
-        <input class="sltp-input" type="number" step="0.00001" value="${p.tp || ''}" placeholder="TP" data-field="tp" />
-        <button class="secondary" onclick="modifyPosition(${p.ticket})">Lưu</button>
+        <input class="sltp-input" type="number" step="0.00001" value="${p.sl || ''}" placeholder="SL" data-field="sl" ${dis} />
+        <input class="sltp-input" type="number" step="0.00001" value="${p.tp || ''}" placeholder="TP" data-field="tp" ${dis} />
+        <button class="secondary" onclick="modifyPosition(${p.ticket})" ${dis}>Lưu</button>
       </td>
-      <td><button class="danger" onclick="closePosition(${p.ticket})">Đóng</button></td>
+      <td><button class="danger" onclick="closePosition(${p.ticket})" ${dis}>Đóng</button></td>
     </tr>
   `).join('');
 }
 
 async function closePosition(ticket) {
   try {
-    await api(`/api/positions/${ticket}/close`, 'POST');
+    await api(`/api/${currentAccountId}/positions/${ticket}/close`, 'POST');
     toast(`Đã gửi lệnh đóng #${ticket}`);
   } catch (e) { toast(e.message, true); }
 }
@@ -355,7 +483,7 @@ async function modifyPosition(ticket) {
   const sl = parseFloat(row.querySelector('[data-field="sl"]').value) || 0;
   const tp = parseFloat(row.querySelector('[data-field="tp"]').value) || 0;
   try {
-    await api(`/api/positions/${ticket}/modify`, 'POST', {sl, tp});
+    await api(`/api/${currentAccountId}/positions/${ticket}/modify`, 'POST', {sl, tp});
     toast(`Đã cập nhật SL/TP #${ticket}`);
   } catch (e) { toast(e.message, true); }
 }
@@ -363,7 +491,7 @@ async function modifyPosition(ticket) {
 async function closeAll(filter) {
   if (!confirm(`Xác nhận đóng tất cả lệnh (${filter})?`)) return;
   try {
-    await api('/api/positions/close_all', 'POST', {filter});
+    await api(`/api/${currentAccountId}/positions/close_all`, 'POST', {filter});
     toast('Đã gửi lệnh đóng');
   } catch (e) { toast(e.message, true); }
 }
@@ -373,13 +501,13 @@ async function closeByThreshold() {
   const amount = parseFloat(document.getElementById('thresholdAmount').value);
   if (isNaN(amount)) { toast('Nhập ngưỡng USD trước', true); return; }
   try {
-    const res = await api('/api/positions/close_by_threshold', 'POST', {op, amount});
+    const res = await api(`/api/${currentAccountId}/positions/close_by_threshold`, 'POST', {op, amount});
     toast(res.triggered ? `Đã đóng tất cả (tổng ${fmt(res.total_profit)})` : `Chưa đạt ngưỡng (hiện tại ${fmt(res.total_profit)})`);
   } catch (e) { toast(e.message, true); }
 }
 
 async function refreshPositions() {
-  try { await api('/api/positions/refresh', 'POST'); } catch (e) { toast(e.message, true); }
+  try { await api(`/api/${currentAccountId}/positions/refresh`, 'POST'); } catch (e) { toast(e.message, true); }
 }
 
 async function quickOrder(side) {
@@ -387,7 +515,7 @@ async function quickOrder(side) {
   const volume = parseFloat(document.getElementById('q_lot').value);
   if (!symbol || !volume || volume <= 0) { toast('Nhập symbol và lot hợp lệ', true); return; }
   try {
-    await api('/api/orders', 'POST', {symbol, side, volume, count: 1});
+    await api(`/api/${currentAccountId}/orders`, 'POST', {symbol, side, volume, count: 1});
     toast(`Đã đặt lệnh ${side} nhanh ${fmt(volume, 2)} lot ${symbol}`);
   } catch (e) { toast(e.message, true); }
 }
@@ -414,48 +542,52 @@ async function submitOrder() {
     lot_value: parseFloat(document.getElementById('f_lotvalue').value) || 0,
   };
   try {
-    await api('/api/orders', 'POST', body);
+    await api(`/api/${currentAccountId}/orders`, 'POST', body);
     toast('Đã đặt lệnh');
     closeOrderModal();
   } catch (e) { toast(e.message, true); }
 }
 
-function connectWs() {
+function connectPositionsWs() {
+  const accountId = currentAccountId;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}/ws/positions`);
-  ws.onopen = () => { statusEl.textContent = 'Đã kết nối'; statusEl.className = 'up'; };
-  ws.onclose = () => {
-    statusEl.textContent = 'Mất kết nối, đang thử lại...'; statusEl.className = 'down';
-    setTimeout(connectWs, 2000);
-  };
-  ws.onerror = () => ws.close();
+  const ws = new WebSocket(`${proto}://${location.host}/ws/${accountId}/positions`);
+  wsPositions = ws;
   ws.onmessage = (ev) => {
+    if (accountId !== currentAccountId) return;
     const data = JSON.parse(ev.data);
     lastPositions = data.positions;
     lastTotalProfit = data.total_profit;
     renderPositions();
   };
+  ws.onclose = () => {
+    if (accountId === currentAccountId) setTimeout(() => { if (accountId === currentAccountId) connectPositionsWs(); }, 2000);
+  };
+  ws.onerror = () => ws.close();
 }
-connectWs();
 
 function renderAccount(data) {
   const currency = data.currency || '';
-  document.getElementById('acc_balance').textContent = `${fmt(data.balance || 0)} ${currency}`;
-  document.getElementById('acc_equity').textContent = `${fmt(data.equity || 0)} ${currency}`;
-  document.getElementById('acc_margin').textContent = fmt(data.margin || 0);
-  document.getElementById('acc_margin_free').textContent = fmt(data.margin_free || 0);
+  document.getElementById('acc_balance').textContent = `${fmt(data.balance)} ${currency}`;
+  document.getElementById('acc_equity').textContent = `${fmt(data.equity)} ${currency}`;
+  document.getElementById('acc_margin').textContent = fmt(data.margin);
+  document.getElementById('acc_margin_free').textContent = fmt(data.margin_free);
   document.getElementById('acc_margin_level').textContent = data.margin_level ? `${fmt(data.margin_level)}%` : '-';
 
   const floatEl = document.getElementById('acc_floating');
-  floatEl.textContent = fmt(data.floating_profit || 0);
+  floatEl.textContent = fmt(data.floating_profit);
   floatEl.className = 'stat-value ' + ((data.floating_profit || 0) >= 0 ? 'profit-pos' : 'profit-neg');
 
-  document.getElementById('acc_buy').textContent = `${data.open_buy_count || 0} (${fmt(data.open_buy_volume || 0)} lot)`;
-  document.getElementById('acc_sell').textContent = `${data.open_sell_count || 0} (${fmt(data.open_sell_volume || 0)} lot)`;
+  document.getElementById('acc_buy').textContent = `${data.open_buy_count || 0} (${fmt(data.open_buy_volume)} lot)`;
+  document.getElementById('acc_sell').textContent = `${data.open_sell_count || 0} (${fmt(data.open_sell_volume)} lot)`;
 
   const magicEl = document.getElementById('magicInput');
   magicEl.placeholder = String(data.magic ?? '-');
   document.getElementById('magicCurrent').textContent = `Hiện tại: ${data.magic ?? '-'}`;
+
+  currentAccountConnected = !!data.connected;
+  updateDetailHeader();
+  updateActionAvailability();
 }
 
 async function saveMagic() {
@@ -463,20 +595,23 @@ async function saveMagic() {
   const magic = parseInt(raw, 10);
   if (raw === '' || isNaN(magic)) { toast('Nhập magic number hợp lệ', true); return; }
   try {
-    await api('/api/magic', 'POST', {magic});
+    await api(`/api/${currentAccountId}/magic`, 'POST', {magic});
     toast(`Đã đặt Magic Number = ${magic}`);
     document.getElementById('magicInput').value = '';
   } catch (e) { toast(e.message, true); }
 }
 
 function connectAccountWs() {
+  const accountId = currentAccountId;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}/ws/account`);
-  ws.onmessage = (ev) => renderAccount(JSON.parse(ev.data));
-  ws.onclose = () => setTimeout(connectAccountWs, 2000);
+  const ws = new WebSocket(`${proto}://${location.host}/ws/${accountId}/account`);
+  wsAccount = ws;
+  ws.onmessage = (ev) => { if (accountId === currentAccountId) renderAccount(JSON.parse(ev.data)); };
+  ws.onclose = () => {
+    if (accountId === currentAccountId) setTimeout(() => { if (accountId === currentAccountId) connectAccountWs(); }, 2000);
+  };
   ws.onerror = () => ws.close();
 }
-connectAccountWs();
 
 function renderSymbolOptions(symbols) {
   const opts = symbols.map(s => `<option value="${s}">${s}</option>`).join('');
@@ -489,13 +624,16 @@ function renderSymbolOptions(symbols) {
 }
 
 function connectSymbolsWs() {
+  const accountId = currentAccountId;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}/ws/symbols`);
-  ws.onmessage = (ev) => renderSymbolOptions(JSON.parse(ev.data));
-  ws.onclose = () => setTimeout(connectSymbolsWs, 2000);
+  const ws = new WebSocket(`${proto}://${location.host}/ws/${accountId}/symbols`);
+  wsSymbols = ws;
+  ws.onmessage = (ev) => { if (accountId === currentAccountId) renderSymbolOptions(JSON.parse(ev.data)); };
+  ws.onclose = () => {
+    if (accountId === currentAccountId) setTimeout(() => { if (accountId === currentAccountId) connectSymbolsWs(); }, 2000);
+  };
   ws.onerror = () => ws.close();
 }
-connectSymbolsWs();
 
 function profitBar(value, maxAbs, side) {
   const pct = maxAbs > 0 ? Math.min(100, Math.abs(value) / maxAbs * 100) : 0;
@@ -532,21 +670,23 @@ function renderInsights(rows) {
 }
 
 async function loadInsights() {
+  if (!currentAccountId) return;
+  const accountId = currentAccountId;
   const bucket = document.getElementById('insightBucket').value;
   try {
-    const data = await api(`/api/insights?bucket=${bucket}&limit=30`, 'GET');
-    renderInsights(data.rows);
+    const data = await api(`/api/${accountId}/insights?bucket=${bucket}&limit=30`, 'GET');
+    if (accountId === currentAccountId) renderInsights(data.rows);
   } catch (e) { toast(e.message, true); }
   try {
-    const s = await api('/api/summary', 'GET');
+    const s = await api(`/api/${accountId}/summary`, 'GET');
+    if (accountId !== currentAccountId) return;
     const pf = s.profit_factor === null || s.profit_factor === undefined ? '-' : s.profit_factor;
     document.getElementById('summaryLine').textContent =
       `${s.trades} lệnh đã đóng · Win rate ${s.win_rate}% · Profit factor ${pf} · Tổng PnL ${fmt(s.total_profit)}`;
   } catch (e) { /* summary is best-effort */ }
 }
 
-loadInsights();
-setInterval(loadInsights, 15000);
+setInterval(() => { if (currentAccountId) loadInsights(); }, 15000);
 </script>
 </body>
 </html>

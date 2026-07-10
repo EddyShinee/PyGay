@@ -1,26 +1,21 @@
 """Dashboard web layer: REST API + WebSocket, served on top of the same
 asyncio loop as the MT5 socket server (see main.py).
 
-Kept separate from socket_server/handlers on purpose: this file only knows
-about PositionStore/TradeGateway/GridJobManager/PriceCache, never about the
-raw EA protocol.
+Every route (except the accounts list) is scoped to one MT5 account via an
+`{account_id}` path segment, resolved through SessionManager. Kept separate
+from socket_server/handlers on purpose: this file only knows about
+SessionManager/AccountSession, never about the raw EA protocol.
 """
 import asyncio
 import logging
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from position_store import PositionStore
-from trade_gateway import TradeGateway
-from grid_jobs import GridJobManager
-from price_cache import PriceCache
-from account_store import AccountStore
-from symbol_store import SymbolStore
-from history_gateway import HistoryGateway
+from session_manager import SessionManager, AccountSession
 import history
 import db
 
@@ -67,13 +62,17 @@ class HistoryFetchRequest(BaseModel):
     count: int = 1000
 
 
-def _account_response(store: PositionStore, account_store: AccountStore) -> dict:
-    positions = store.snapshot()
+def _account_response(session: AccountSession) -> dict:
+    positions = session.store.snapshot()
     buy = [p for p in positions if p["side"] == "BUY"]
     sell = [p for p in positions if p["side"] == "SELL"]
     return {
-        **account_store.snapshot(),
-        "floating_profit": store.total_profit(),
+        **session.account_store.snapshot(),
+        "account_id": session.account_id,
+        "broker": session.info.get("broker", ""),
+        "name": session.info.get("name", ""),
+        "connected": session.connected,
+        "floating_profit": session.store.total_profit(),
         "open_count": len(positions),
         "open_buy_count": len(buy),
         "open_sell_count": len(sell),
@@ -82,49 +81,67 @@ def _account_response(store: PositionStore, account_store: AccountStore) -> dict
     }
 
 
-def create_app(store: PositionStore, gateway: TradeGateway,
-                grid_manager: GridJobManager, price_cache: PriceCache,
-                account_store: AccountStore, symbol_store: SymbolStore,
-                history_gateway: HistoryGateway) -> FastAPI:
+def create_app(sessions: SessionManager) -> FastAPI:
     app = FastAPI(title="MT5 Dashboard")
 
-    @app.get("/api/positions")
-    async def get_positions():
-        return {"positions": store.snapshot(), "total_profit": store.total_profit()}
+    def get_session(account_id: str) -> AccountSession:
+        session = sessions.get(account_id)
+        if session is None:
+            raise HTTPException(404, f"Chưa biết tài khoản {account_id} (chưa từng kết nối)")
+        return session
 
-    @app.get("/api/account")
-    async def get_account():
-        return _account_response(store, account_store)
+    def require_connected(session: AccountSession) -> None:
+        if not session.connected:
+            raise HTTPException(409, f"Tài khoản {session.account_id} hiện đang offline")
 
-    @app.get("/api/symbols")
-    async def get_symbols():
-        return {"symbols": symbol_store.snapshot()}
+    @app.get("/api/accounts")
+    async def get_accounts():
+        return {"accounts": sessions.list_accounts()}
 
-    @app.get("/api/insights")
-    async def get_insights(bucket: Literal["minute", "hour", "day", "month", "year"] = "day",
+    @app.get("/api/{account_id}/positions")
+    async def get_positions(account_id: str):
+        session = get_session(account_id)
+        return {"positions": session.store.snapshot(), "total_profit": session.store.total_profit()}
+
+    @app.get("/api/{account_id}/account")
+    async def get_account(account_id: str):
+        return _account_response(get_session(account_id))
+
+    @app.get("/api/{account_id}/symbols")
+    async def get_symbols(account_id: str):
+        return {"symbols": get_session(account_id).symbol_store.snapshot()}
+
+    @app.get("/api/{account_id}/insights")
+    async def get_insights(account_id: str, bucket: Literal["minute", "hour", "day", "month", "year"] = "day",
                             limit: int = 30):
-        return {"bucket": bucket, "rows": db.insights(bucket, limit)}
+        get_session(account_id)  # 404 if unknown
+        return {"bucket": bucket, "rows": db.insights(account_id, bucket, limit)}
 
-    @app.get("/api/summary")
-    async def get_summary():
-        return db.summary()
+    @app.get("/api/{account_id}/summary")
+    async def get_summary(account_id: str):
+        get_session(account_id)
+        return db.summary(account_id)
 
-    @app.get("/api/jobs")
-    async def get_jobs():
-        return {"jobs": grid_manager.active_jobs()}
+    @app.get("/api/{account_id}/jobs")
+    async def get_jobs(account_id: str):
+        return {"jobs": get_session(account_id).grid_manager.active_jobs()}
 
-    @app.post("/api/positions/refresh")
-    async def refresh_positions():
-        await gateway.request_positions()
+    @app.post("/api/{account_id}/positions/refresh")
+    async def refresh_positions(account_id: str):
+        session = get_session(account_id)
+        require_connected(session)
+        await session.gateway.request_positions()
         return {"ok": True}
 
-    @app.post("/api/orders")
-    async def place_order(req: OrderRequest):
-        cached = price_cache.get(req.symbol)
+    @app.post("/api/{account_id}/orders")
+    async def place_order(account_id: str, req: OrderRequest):
+        session = get_session(account_id)
+        require_connected(session)
+        cached = session.price_cache.get(req.symbol)
         if cached is None:
             raise HTTPException(400, f"Chưa có dữ liệu giá cho {req.symbol}, chờ EA gửi tick trước.")
         price = cached["ask"] if req.side == "BUY" else cached["bid"]
-        result = await grid_manager.start_job(
+        result = await session.grid_manager.start_job(
             symbol=req.symbol, side=req.side, volume=req.volume,
             sl_points=req.sl_points, tp_points=req.tp_points, count=req.count,
             spacing_points=req.spacing_points, direction=req.direction,
@@ -135,63 +152,93 @@ def create_app(store: PositionStore, gateway: TradeGateway,
             raise HTTPException(400, result.get("error", "order failed"))
         return result
 
-    @app.post("/api/positions/{ticket}/close")
-    async def close_position(ticket: int):
-        result = await gateway.close_position(ticket)
+    @app.post("/api/{account_id}/positions/{ticket}/close")
+    async def close_position(account_id: str, ticket: int):
+        session = get_session(account_id)
+        require_connected(session)
+        result = await session.gateway.close_position(ticket)
         if not result.get("ok"):
             raise HTTPException(400, result.get("error", "close failed"))
         return result
 
-    @app.post("/api/positions/close_all")
-    async def close_all(req: CloseAllRequest):
-        result = await gateway.close_all(req.filter)
+    @app.post("/api/{account_id}/positions/close_all")
+    async def close_all(account_id: str, req: CloseAllRequest):
+        session = get_session(account_id)
+        require_connected(session)
+        result = await session.gateway.close_all(req.filter)
         if not result.get("ok"):
             raise HTTPException(400, result.get("error", "close_all failed"))
         return result
 
-    @app.post("/api/positions/close_by_threshold")
-    async def close_by_threshold(req: CloseByThresholdRequest):
-        total = store.total_profit()
+    @app.post("/api/{account_id}/positions/close_by_threshold")
+    async def close_by_threshold(account_id: str, req: CloseByThresholdRequest):
+        session = get_session(account_id)
+        total = session.store.total_profit()
         triggered = total >= req.amount if req.op == ">=" else total <= req.amount
         if not triggered:
             return {"triggered": False, "total_profit": total}
-        result = await gateway.close_all("all")
+        require_connected(session)
+        result = await session.gateway.close_all("all")
         result["triggered"] = True
         result["total_profit"] = total
         return result
 
-    @app.post("/api/positions/{ticket}/modify")
-    async def modify_position(ticket: int, req: ModifyRequest):
-        result = await gateway.modify_position(ticket, req.sl, req.tp)
+    @app.post("/api/{account_id}/positions/{ticket}/modify")
+    async def modify_position(account_id: str, ticket: int, req: ModifyRequest):
+        session = get_session(account_id)
+        require_connected(session)
+        result = await session.gateway.modify_position(ticket, req.sl, req.tp)
         if not result.get("ok"):
             raise HTTPException(400, result.get("error", "modify failed"))
         return result
 
-    @app.post("/api/magic")
-    async def set_magic(req: MagicRequest):
-        result = await gateway.set_magic(req.magic)
+    @app.post("/api/{account_id}/magic")
+    async def set_magic(account_id: str, req: MagicRequest):
+        session = get_session(account_id)
+        require_connected(session)
+        result = await session.gateway.set_magic(req.magic)
         if not result.get("ok"):
             raise HTTPException(400, result.get("error", "set magic failed"))
         return result
 
-    @app.post("/api/history/fetch")
-    async def fetch_history(req: HistoryFetchRequest):
+    @app.post("/api/{account_id}/history/fetch")
+    async def fetch_history(account_id: str, req: HistoryFetchRequest):
         """Pull `count` bars from the EA and append new ones to CSV. Meant to
         be called by an external cron job (see tools/fetch_history_cron.py) -
         this process must already be running since it owns the live EA link."""
+        session = get_session(account_id)
+        require_connected(session)
         try:
-            bars = await history_gateway.fetch(req.symbol, req.timeframe, req.count)
+            bars = await session.history_gateway.fetch(req.symbol, req.timeframe, req.count)
         except (RuntimeError, asyncio.TimeoutError) as exc:
             raise HTTPException(400, str(exc))
-        saved = history.append_bars(req.symbol, req.timeframe, bars)
+        saved = history.append_bars(account_id, req.symbol, req.timeframe, bars)
         return {"symbol": req.symbol, "timeframe": req.timeframe, "fetched": len(bars), "saved": saved}
 
-    @app.websocket("/ws/positions")
-    async def ws_positions(ws: WebSocket):
+    @app.websocket("/ws/accounts")
+    async def ws_accounts(ws: WebSocket):
         await ws.accept()
-        queue = store.subscribe()
+        queue = sessions.subscribe()
         try:
-            await ws.send_json({"positions": store.snapshot(), "total_profit": store.total_profit()})
+            await ws.send_json(sessions.list_accounts())
+            while True:
+                accounts = await queue.get()
+                await ws.send_json(accounts)
+        except WebSocketDisconnect:
+            pass
+        finally:
+            sessions.unsubscribe(queue)
+
+    @app.websocket("/ws/{account_id}/positions")
+    async def ws_positions(ws: WebSocket, account_id: str):
+        session = sessions.get(account_id)
+        if session is None:
+            await ws.close(code=4404)
+            return
+        await ws.accept()
+        queue = session.store.subscribe()
+        try:
+            await ws.send_json({"positions": session.store.snapshot(), "total_profit": session.store.total_profit()})
             while True:
                 snapshot = await queue.get()
                 await ws.send_json({
@@ -201,35 +248,43 @@ def create_app(store: PositionStore, gateway: TradeGateway,
         except WebSocketDisconnect:
             pass
         finally:
-            store.unsubscribe(queue)
+            session.store.unsubscribe(queue)
 
-    @app.websocket("/ws/account")
-    async def ws_account(ws: WebSocket):
+    @app.websocket("/ws/{account_id}/account")
+    async def ws_account(ws: WebSocket, account_id: str):
+        session = sessions.get(account_id)
+        if session is None:
+            await ws.close(code=4404)
+            return
         await ws.accept()
-        queue = account_store.subscribe()
+        queue = session.account_store.subscribe()
         try:
-            await ws.send_json(_account_response(store, account_store))
+            await ws.send_json(_account_response(session))
             while True:
                 await queue.get()
-                await ws.send_json(_account_response(store, account_store))
+                await ws.send_json(_account_response(session))
         except WebSocketDisconnect:
             pass
         finally:
-            account_store.unsubscribe(queue)
+            session.account_store.unsubscribe(queue)
 
-    @app.websocket("/ws/symbols")
-    async def ws_symbols(ws: WebSocket):
+    @app.websocket("/ws/{account_id}/symbols")
+    async def ws_symbols(ws: WebSocket, account_id: str):
+        session = sessions.get(account_id)
+        if session is None:
+            await ws.close(code=4404)
+            return
         await ws.accept()
-        queue = symbol_store.subscribe()
+        queue = session.symbol_store.subscribe()
         try:
-            await ws.send_json(symbol_store.snapshot())
+            await ws.send_json(session.symbol_store.snapshot())
             while True:
                 snapshot = await queue.get()
                 await ws.send_json(snapshot)
         except WebSocketDisconnect:
             pass
         finally:
-            symbol_store.unsubscribe(queue)
+            session.symbol_store.unsubscribe(queue)
 
     app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
     return app

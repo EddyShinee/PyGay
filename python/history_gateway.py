@@ -14,8 +14,9 @@ logger = logging.getLogger("history_gateway")
 
 
 class HistoryGateway:
-    def __init__(self, server: SocketServer, timeout: float = 30.0):
+    def __init__(self, server: SocketServer, account_id: str, timeout: float = 30.0):
         self.server = server
+        self.account_id = account_id
         self.timeout = timeout
         self._pending: dict[str, dict] = {}  # id -> {"bars": [...], "future": Future}
 
@@ -30,7 +31,7 @@ class HistoryGateway:
             entry["future"].set_result(entry["bars"])
 
     def _current_client(self) -> Optional[Client]:
-        clients = self.server.clients()
+        clients = [c for c in self.server.clients() if c.account_id == self.account_id]
         return clients[-1] if clients else None
 
     async def fetch(self, symbol: str, timeframe: str, count: int) -> list[dict]:

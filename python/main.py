@@ -4,13 +4,7 @@ import logging
 import uvicorn
 
 from socket_server import SocketServer
-from position_store import PositionStore
-from trade_gateway import TradeGateway
-from grid_jobs import GridJobManager
-from price_cache import PriceCache
-from account_store import AccountStore
-from symbol_store import SymbolStore
-from history_gateway import HistoryGateway
+from session_manager import SessionManager
 import db
 import handlers
 import web
@@ -23,18 +17,10 @@ async def run() -> None:
     db.init_db()
 
     server = SocketServer(host=SOCKET_HOST, port=SOCKET_PORT)
-    store = PositionStore()
-    gateway = TradeGateway(server)
-    grid_manager = GridJobManager(gateway)
-    price_cache = PriceCache()
-    account_store = AccountStore()
-    symbol_store = SymbolStore()
-    history_gateway = HistoryGateway(server)
-    handlers.register(server, store, gateway, grid_manager, price_cache,
-                       account_store, symbol_store, history_gateway)
+    sessions = SessionManager(server)
+    handlers.register(server, sessions)
 
-    app = web.create_app(store, gateway, grid_manager, price_cache,
-                          account_store, symbol_store, history_gateway)
+    app = web.create_app(sessions)
     web_config = uvicorn.Config(app, host=WEB_HOST, port=WEB_PORT, log_level="info")
     web_server = uvicorn.Server(web_config)
 

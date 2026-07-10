@@ -1,8 +1,7 @@
-"""Sends commands to the connected EA and correlates responses by id.
-
-Assumes a single connected EA (the most recently connected client) -
-matches the current one-terminal setup. `resolve()` is called by the
-"order_result" handler in handlers.py to wake up whoever is awaiting.
+"""Sends commands to the EA belonging to one MT5 account and correlates
+responses by id. One TradeGateway per AccountSession (see session_manager.py)
+- `resolve()` is called by the "order_result" handler in handlers.py, routed
+to the right instance via the sending client's account_id.
 """
 import asyncio
 import logging
@@ -15,8 +14,9 @@ logger = logging.getLogger("trade_gateway")
 
 
 class TradeGateway:
-    def __init__(self, server: SocketServer, timeout: float = 5.0):
+    def __init__(self, server: SocketServer, account_id: str, timeout: float = 5.0):
         self.server = server
+        self.account_id = account_id
         self.timeout = timeout
         self._pending: dict[str, asyncio.Future] = {}
 
@@ -28,7 +28,7 @@ class TradeGateway:
             future.set_result(message)
 
     def _current_client(self) -> Optional[Client]:
-        clients = self.server.clients()
+        clients = [c for c in self.server.clients() if c.account_id == self.account_id]
         return clients[-1] if clients else None
 
     async def _send(self, message: dict) -> dict:

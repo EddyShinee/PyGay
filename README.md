@@ -1,10 +1,12 @@
 # MT5 <-> Python Socket Bridge + Web Dashboard
 
-Kết nối MetaTrader 5 (EA) với Python qua TCP, JSON mỗi dòng một message
-(newline-delimited JSON). **Python là server, MT5 là client.** Phía trên
-cầu nối đó là một dashboard web (FastAPI) để xem danh sách giao dịch, thông
-tin tài khoản + insight BUY/SELL theo thời gian, đặt lệnh (kể cả batch/grid
-DCA), đóng lệnh và sửa SL/TP.
+Kết nối nhiều MetaTrader 5 (EA) với Python qua TCP, JSON mỗi dòng một
+message (newline-delimited JSON). **Python là server, mỗi MT5 terminal là
+1 client.** Phía trên cầu nối đó là **1 dashboard web duy nhất quản lý
+nhiều tài khoản** (FastAPI): trang tổng quan liệt kê mọi tài khoản đang/đã
+từng kết nối, bấm vào 1 tài khoản để xem chi tiết - danh sách giao dịch,
+thông tin tài khoản + insight BUY/SELL theo thời gian, đặt lệnh (kể cả
+batch/grid DCA), đóng lệnh và sửa SL/TP.
 
 ```
 mql5/
@@ -12,31 +14,35 @@ mql5/
     Socket.mqh   # wrapper Winsock (ws2_32.dll) - TCP client non-blocking
     Json.mqh     # JSON phẳng (flat) tối giản: parse + serialize
   Experts/
-    SocketBridgeEA.mq5   # EA: gửi tick + snapshot vị thế + account, nhận lệnh,
-                          # đặt/đóng/sửa lệnh, đồng bộ deal đã đóng
+    SocketBridgeEA.mq5   # EA: gửi hello + tick + snapshot vị thế + account,
+                          # nhận lệnh, đặt/đóng/sửa lệnh, đồng bộ deal đã đóng
 
 python/
   protocol.py       # encode/decode khung JSON + \n
-  socket_server.py  # transport layer (asyncio TCP server), không chứa business logic
-  handlers.py        # business logic: xử lý message theo "type"
-  models.py           # dataclass Position
-  position_store.py   # snapshot vị thế hiện tại + pub/sub cho WebSocket
-  account_store.py      # snapshot tài khoản (balance/equity/margin/...) + pub/sub
-  symbol_store.py         # danh sách symbol từ sàn (từ EA) + pub/sub
-  price_cache.py            # giá bid/ask/point mới nhất theo symbol (từ tick)
-  trade_gateway.py           # gửi lệnh xuống EA, chờ order_result theo id
-  history_gateway.py           # xin dữ liệu giá lịch sử (OHLC) từ EA, gom theo id
-  history.py                     # ghi bar lịch sử vào CSV, dedupe theo time
-  grid_jobs.py                     # batch order kiểu grid/DCA (theo dõi tick để bắn lệnh tiếp theo)
-  db.py                              # SQLite: lưu deal đã đóng + query insight theo bucket thời gian
-  web.py                               # FastAPI: REST + WebSocket cho dashboard
-  static/index.html                      # giao diện dashboard (vanilla JS, không build step)
-  tools/fake_ea.py                         # giả lập EA để test không cần MT5 thật
-  tools/fetch_history_cron.py                # cron gọi mỗi giờ để lấy giá lịch sử -> CSV
-  main.py                                      # điểm khởi chạy (chạy chung socket server + web server)
+  socket_server.py  # transport layer (asyncio TCP server) - Client.account_id
+                     # gắn lúc "hello", không chứa business logic
+  session_manager.py # SessionManager: 1 AccountSession (gói mọi store/gateway
+                      # bên dưới) cho mỗi account_id, tra cứu theo client.account_id
+  handlers.py         # business logic: xử lý message theo "type", route vào
+                       # đúng AccountSession qua client.account_id
+  models.py             # dataclass Position
+  position_store.py     # snapshot vị thế hiện tại + pub/sub cho WebSocket
+  account_store.py        # snapshot tài khoản (balance/equity/margin/...) + pub/sub
+  symbol_store.py           # danh sách symbol từ sàn (từ EA) + pub/sub
+  price_cache.py              # giá bid/ask/point mới nhất theo symbol (từ tick)
+  trade_gateway.py             # gửi lệnh xuống EA của 1 account, chờ order_result theo id
+  history_gateway.py             # xin dữ liệu giá lịch sử (OHLC) từ EA của 1 account
+  history.py                       # ghi bar lịch sử vào CSV theo account, dedupe theo time
+  grid_jobs.py                       # batch order kiểu grid/DCA (theo dõi tick để bắn lệnh tiếp theo)
+  db.py                                # SQLite: lưu deal đã đóng (khóa theo account_id+ticket)
+  web.py                                 # FastAPI: REST + WebSocket, mọi route scope theo {account_id}
+  static/index.html                        # dashboard: view tổng quan + view chi tiết theo account
+  tools/fake_ea.py                           # giả lập EA (--account <id>) để test không cần MT5 thật
+  tools/fetch_history_cron.py                  # cron gọi mỗi giờ để lấy giá lịch sử -> CSV
+  main.py                                        # điểm khởi chạy (chạy chung socket server + web server)
   requirements.txt
   trades.db      # SQLite, tự tạo khi chạy - không commit (đã .gitignore)
-  history/         # CSV giá lịch sử theo symbol/timeframe, tự tạo - không commit
+  history/         # CSV giá lịch sử theo account/symbol/timeframe, tự tạo - không commit
 ```
 
 ## Chạy thử
@@ -52,12 +58,18 @@ python3 main.py
 - Web dashboard chạy ở `http://127.0.0.1:8000` (chỉ nên chạy trên
   localhost - **chưa có xác thực/đăng nhập**).
 
-Chưa có MT5 thật? Mở terminal khác, chạy `python3 tools/fake_ea.py` để giả
-lập EA (random-walk giá + vị thế giả) và thao tác thử trên dashboard.
+Chưa có MT5 thật? Mở terminal khác, chạy `python3 tools/fake_ea.py --account 1001`
+để giả lập EA (random-walk giá + vị thế giả) và thao tác thử trên dashboard.
+Chạy thêm `python3 tools/fake_ea.py --account 1002 --ticket-start 5000` ở
+terminal khác nữa để giả lập tài khoản thứ 2 - cả 2 cùng connect vào port
+9090, dashboard sẽ hiện cả 2 trong trang tổng quan.
 
 Trong MetaEditor: copy `mql5/Include/*.mqh` vào `MQL5/Include/`,
 `mql5/Experts/SocketBridgeEA.mq5` vào `MQL5/Experts/`, compile, rồi gắn EA
-vào chart.
+vào từng chart - **mỗi MT5 terminal/tài khoản gắn EA riêng, tất cả trỏ về
+cùng 1 `InpHost`/`InpPort`** (mặc định `127.0.0.1:9090`); Python tự phân
+biệt tài khoản qua message `hello` mà EA gửi lúc kết nối, không cần cấu
+hình gì thêm để chạy nhiều tài khoản.
 
 **Bắt buộc**: trong MT5, bật *Tools > Options > Expert Advisors > Allow DLL
 imports*, và tick "Allow DLL imports" khi gắn EA vào chart. `Socket.mqh` dùng
@@ -73,6 +85,7 @@ Mỗi message là một dòng JSON phẳng, kết thúc bằng `\n`.
 
 | type | fields | khi nào gửi |
 |---|---|---|
+| `hello` | account_id (=`ACCOUNT_LOGIN`), broker, name, currency | **luôn gửi đầu tiên**, ngay sau khi connect thành công, trước mọi message khác |
 | `tick` | symbol, bid, ask, point, time | mỗi tick |
 | `positions_begin` | count | mở đầu 1 đợt snapshot vị thế |
 | `position` | ticket, symbol, side, volume, price_open, sl, tp, profit, swap, time_open, magic | mỗi vị thế đang mở, trong 1 đợt snapshot |
@@ -110,8 +123,17 @@ phải watcher chạy nền.
 
 ## Dashboard web
 
-Mở `http://127.0.0.1:8000`:
-- Bảng vị thế đang mở, cập nhật realtime qua WebSocket (`/ws/positions`).
+Mở `http://127.0.0.1:8000` — **trang tổng quan** hiện ra trước tiên: 1 card
+mỗi tài khoản đang/đã từng kết nối (chấm xanh = online, xám = offline),
+kèm Balance/Equity/lãi-lỗ trôi nổi/số lệnh rút gọn, cập nhật realtime qua
+`WS /ws/accounts`. Bấm vào 1 card để vào **view chi tiết** của tài khoản đó
+(nút "← Tất cả tài khoản" để quay lại). Tài khoản offline vẫn hiện trong
+danh sách và xem được dữ liệu/lịch sử cuối cùng biết được, nhưng mọi nút
+đặt/đóng/sửa lệnh trong view chi tiết bị vô hiệu hóa (mờ đi, server cũng
+chặn bằng HTTP 409 nếu cố gọi thẳng API).
+
+Trong view chi tiết:
+- Bảng vị thế đang mở, cập nhật realtime qua WebSocket (`/ws/{account_id}/positions`).
   Click header **Giá vào / Thời gian / Profit** để sort (click lại để đảo
   chiều tăng/giảm), và ô **Lọc theo ticket** để lọc nhanh 1 lệnh cụ thể -
   cả hai chỉ ảnh hưởng hiển thị, không ảnh hưởng "Số lệnh"/"Tổng lãi/lỗ".
@@ -139,12 +161,18 @@ Mở `http://127.0.0.1:8000`:
   được điền dần qua message `deal_closed` từ EA - vì vậy chỉ có dữ liệu từ
   lúc EA bắt đầu kết nối trở đi.
 
-REST API chính: `GET /api/positions`, `GET /api/account`,
-`GET /api/insights?bucket=day&limit=30`, `GET /api/summary`, `POST /api/orders`,
-`POST /api/positions/{ticket}/close`, `POST /api/positions/close_all`,
-`POST /api/positions/close_by_threshold`, `POST /api/positions/{ticket}/modify`,
-`POST /api/positions/refresh` (yêu cầu EA gửi lại snapshot ngay),
-`POST /api/magic` (`{"magic": <int>}`).
+`GET /api/accounts` (danh sách tất cả tài khoản, dùng cho trang tổng quan)
+và `WS /ws/accounts` không cần account_id. Mọi route còn lại scope theo
+1 tài khoản qua prefix `/api/{account_id}/...`: `GET .../positions`,
+`GET .../account`, `GET .../insights?bucket=day&limit=30`,
+`GET .../summary`, `POST .../orders`, `POST .../positions/{ticket}/close`,
+`POST .../positions/close_all`, `POST .../positions/close_by_threshold`,
+`POST .../positions/{ticket}/modify`, `POST .../positions/refresh`,
+`POST .../magic` (`{"magic": <int>}`); WS tương tự:
+`/ws/{account_id}/positions`, `/ws/{account_id}/account`,
+`/ws/{account_id}/symbols`. Account_id không tồn tại (`session_manager`
+chưa từng thấy `hello` nào) trả về `404`; gọi lệnh khi tài khoản offline
+trả về `409`.
 
 ## Lấy giá lịch sử (cho pipeline ML sau này)
 
@@ -153,18 +181,19 @@ dùng huấn luyện model ML, đóng gói ONNX, chạy kèm indicator.
 
 - **Không phải 1 tiến trình nền tự chạy riêng** — vì chỉ có `main.py` đang
   chạy mới giữ kết nối sống với EA, nên việc lấy lịch sử phải đi qua chính
-  process đó: `POST /api/history/fetch` (`{"symbol","timeframe","count"}`)
-  gọi `history_gateway.py` để xin `CopyRates(...)` từ EA, rồi `history.py`
-  ghi các bar **mới** (so với lần ghi trước, dedupe theo `time`) vào
-  `python/history/{symbol}_{timeframe}.csv`.
+  process đó: `POST /api/{account_id}/history/fetch` (`{"symbol","timeframe","count"}`)
+  gọi `history_gateway.py` để xin `CopyRates(...)` từ EA của tài khoản đó,
+  rồi `history.py` ghi các bar **mới** (so với lần ghi trước, dedupe theo
+  `time`) vào `python/history/{account_id}_{symbol}_{timeframe}.csv`.
 - **Trigger bằng cron của anh** (đúng như yêu cầu, Python không tự lên lịch):
   thêm `tools/fetch_history_cron.py` vào crontab, chạy mỗi giờ:
   ```
   0 * * * * cd /path/to/PyGay/python && .venv/bin/python3 tools/fetch_history_cron.py >> /tmp/fetch_history.log 2>&1
   ```
-  Sửa danh sách `SYMBOLS = [(symbol, timeframe, count), ...]` trong file đó
-  để thêm/bớt symbol cần thu thập. `main.py` phải đang chạy (và EA đang kết
-  nối) khi cron gọi tới, nếu không sẽ trả lỗi `no EA connected`.
+  Sửa danh sách `JOBS = [(account_id, symbol, timeframe, count), ...]`
+  trong file đó để thêm/bớt tài khoản + symbol cần thu thập. `main.py` phải
+  đang chạy (và EA của account đó đang online) khi cron gọi tới, nếu không
+  sẽ trả lỗi 404 (chưa từng thấy account_id) hoặc 409 (đang offline).
 - `count` nên đủ lớn để phủ hơn khoảng cách giữa 2 lần chạy cron (mặc định
   M1×1000 ≈ 16.6 giờ dữ liệu cho mỗi lần chạy cách nhau 1 giờ) — nhỡ 1 lần
   cron lỗi/máy tắt cũng không bị hở dữ liệu ở lần chạy kế tiếp.
@@ -196,14 +225,22 @@ dùng huấn luyện model ML, đóng gói ONNX, chạy kèm indicator.
 account):
 1. MQL5: build một `CJson` mới, `msg.AddString("type", "account")`, thêm
    field cần thiết, `g_socket.Send(msg.Serialize() + "\n")`.
-2. Python: thêm `@server.on("account")` trong `handlers.py`.
+2. Python: thêm `@server.on("account")` trong `handlers.py`, đầu hàm tra
+   `session = sessions.get(client.account_id)` (như các handler khác) để
+   biết cập nhật đúng `AccountSession` nào.
 
 **Thêm field vào message có sẵn**: chỉ cần thêm một dòng `Add...()` (MQL5)
 hoặc thêm key vào dict (Python) — không cần sửa transport layer.
 
-**Thêm nút/hành động mới trên dashboard**: thêm 1 REST endpoint trong
-`web.py` (gọi `trade_gateway`/`grid_manager`/`store` tương ứng), rồi thêm
-nút + hàm `fetch()` trong `static/index.html`.
+**Thêm nút/hành động mới trên dashboard**: thêm 1 REST endpoint
+`/api/{account_id}/...` trong `web.py` (gọi
+`session.gateway`/`session.grid_manager`/`session.store` tương ứng, lấy
+`session` qua `get_session(account_id)`), rồi thêm nút + hàm `fetch()`
+trong `static/index.html` (nhớ chèn `currentAccountId` vào URL).
+
+**Thêm state mới cần tách riêng theo tài khoản**: thêm field vào
+`AccountSession.__init__()` trong `session_manager.py` - mọi handler/route
+đã tra theo `client.account_id`/`account_id` sẵn, không cần sửa gì khác.
 
 ## Giới hạn hiện tại
 
@@ -212,13 +249,19 @@ nút + hàm `fetch()` trong `static/index.html`.
   cấu trúc phức tạp hơn, mở rộng `Parse()`/`Serialize()` trong file đó. Danh
   sách vị thế vì vậy được truyền dưới dạng nhiều message `position` liên
   tiếp (đóng khung bởi `positions_begin`/`positions_end`) thay vì 1 mảng JSON.
-- Server Python **chỉ hỗ trợ 1 EA/terminal kết nối tại 1 thời điểm** - đây
-  là giới hạn được chủ động enforce ở `socket_server.py`: khi có kết nối
-  mới, kết nối cũ (nếu còn sót do EA bị recompile/mất kết nối đột ngột) sẽ
-  bị đóng ngay, tránh việc `trade_gateway.py` gửi lệnh vào một socket đã
-  chết và bị timeout chờ phản hồi vô ích. Nếu cần chạy nhiều EA song song
-  sau này, cần thêm message `{"type":"hello","account":...}` lúc kết nối
-  để định danh và một cách chọn client theo account.
+- Server Python hỗ trợ **nhiều EA/tài khoản kết nối cùng lúc**, phân biệt
+  qua `account_id` (= `ACCOUNT_LOGIN`) gắn vào mỗi connection lúc `hello`.
+  Chỉ enforce **1 kết nối sống cho mỗi account_id**: nếu 1 account_id cũ
+  còn sót lại (EA bị recompile/mất kết nối đột ngột) mà có kết nối mới
+  cùng account_id đó tới, kết nối cũ bị đóng ngay - tránh
+  `trade_gateway.py` gửi lệnh vào 1 socket đã chết rồi timeout chờ phản
+  hồi vô ích (xem `session_manager.py:bind()`).
+- `session_manager.py` **giữ session lại sau khi EA disconnect** (đánh dấu
+  `connected: false`) thay vì xóa hẳn, để vẫn xem được vị thế/insight lần
+  cuối biết được. Hiện chưa có cơ chế dọn session của tài khoản không bao
+  giờ kết nối lại - nếu chạy lâu dài với nhiều tài khoản test/tạm thời,
+  danh sách tổng quan sẽ tích tụ dần (không ảnh hưởng chức năng, chỉ là
+  danh sách dài hơn).
 - Dashboard web **chưa có xác thực/đăng nhập** — chỉ nên chạy trên
   `127.0.0.1`, không expose ra ngoài mạng.
 - Magic Number chỉ là **giá trị gắn vào lệnh mới mở** qua bridge - EA vẫn

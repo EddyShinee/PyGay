@@ -17,12 +17,18 @@ Handler = Callable[["Client", dict], Awaitable[None]]
 
 
 class Client:
-    """One connected MT5 terminal."""
+    """One connected MT5 terminal.
+
+    account_id is None until the "hello" message is processed (see
+    session_manager.py) - it identifies which MT5 account this connection
+    belongs to, so multiple terminals can stay connected at once.
+    """
 
     def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         self.reader = reader
         self.writer = writer
         self.address = writer.get_extra_info("peername")
+        self.account_id: Optional[str] = None
 
     async def send(self, message: dict) -> None:
         self.writer.write(encode(message))
@@ -53,6 +59,7 @@ class SocketServer:
         # List, not set: order must reflect connection order so clients()[-1]
         # reliably means "most recently connected" (see TradeGateway).
         self._clients: list[Client] = []
+        self._disconnect_handlers: list[Callable[[Client], None]] = []
         self._server: Optional[asyncio.AbstractServer] = None
 
     def on(self, msg_type: str):
@@ -61,6 +68,11 @@ class SocketServer:
             self._handlers[msg_type] = fn
             return fn
         return register
+
+    def on_disconnect(self, fn: Callable[[Client], None]) -> None:
+        """Register a callback invoked (synchronously) when a client
+        disconnects - used by SessionManager to mark a session offline."""
+        self._disconnect_handlers.append(fn)
 
     async def broadcast(self, message: dict) -> None:
         """Push a message to every connected client (e.g. a trade signal)."""
@@ -81,18 +93,6 @@ class SocketServer:
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         client = Client(reader, writer)
-
-        # Only one EA/terminal is supported at a time (see README). If an old
-        # connection is still lingering (e.g. the EA was recompiled/reattached
-        # without a clean disconnect), close it now - otherwise it can outlive
-        # its usefulness in self._clients and get picked by TradeGateway,
-        # which then sends into a dead socket and times out waiting for a
-        # reply that will never come.
-        for stale in list(self._clients):
-            logger.warning("closing stale client %s (new client connecting)", stale.address)
-            await stale.close()
-        self._clients.clear()
-
         self._clients.append(client)
         logger.info("client connected: %s", client.address)
         buffer = b""
@@ -111,7 +111,12 @@ class SocketServer:
             if client in self._clients:
                 self._clients.remove(client)
             await client.close()
-            logger.info("client disconnected: %s", client.address)
+            logger.info("client disconnected: %s (account_id=%s)", client.address, client.account_id)
+            for fn in self._disconnect_handlers:
+                try:
+                    fn(client)
+                except Exception:
+                    logger.exception("on_disconnect handler failed")
 
     async def _dispatch(self, client: Client, message: dict) -> None:
         msg_type = message.get("type")

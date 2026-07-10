@@ -24,48 +24,79 @@ def get_connection(db_path: Path = DB_PATH) -> sqlite3.Connection:
     return conn
 
 
+_CREATE_DEALS_SQL = """
+    CREATE TABLE deals (
+        account_id TEXT NOT NULL DEFAULT '',
+        ticket INTEGER NOT NULL,
+        symbol TEXT NOT NULL,
+        side TEXT NOT NULL,
+        volume REAL NOT NULL,
+        price_open REAL NOT NULL,
+        price_close REAL NOT NULL,
+        profit REAL NOT NULL,
+        swap REAL NOT NULL,
+        commission REAL NOT NULL,
+        time_open INTEGER NOT NULL,
+        time_close INTEGER NOT NULL,
+        PRIMARY KEY (account_id, ticket)
+    )
+"""
+
+
 def init_db(db_path: Path = DB_PATH) -> None:
     conn = get_connection(db_path)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS deals (
-            ticket INTEGER PRIMARY KEY,
-            symbol TEXT NOT NULL,
-            side TEXT NOT NULL,
-            volume REAL NOT NULL,
-            price_open REAL NOT NULL,
-            price_close REAL NOT NULL,
-            profit REAL NOT NULL,
-            swap REAL NOT NULL,
-            commission REAL NOT NULL,
-            time_open INTEGER NOT NULL,
-            time_close INTEGER NOT NULL
-        )
-    """)
+    existing = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='deals'"
+    ).fetchone()
+
+    if existing is None:
+        conn.execute(_CREATE_DEALS_SQL)
+    else:
+        # A pre-multi-account trades.db has `ticket` as the sole primary
+        # key, which silently collides across accounts (ticket/position
+        # ids are only unique *within* one MT5 account) - a plain
+        # `ALTER TABLE ... ADD COLUMN` can add account_id but SQLite can't
+        # alter an existing PRIMARY KEY, so rebuild the table properly.
+        info = conn.execute("PRAGMA table_info(deals)").fetchall()
+        pk_cols = [row[1] for row in sorted((r for r in info if r[5] > 0), key=lambda r: r[5])]
+        if pk_cols != ["account_id", "ticket"]:
+            had_account_id = "account_id" in [row[1] for row in info]
+            conn.execute("ALTER TABLE deals RENAME TO deals_old")
+            conn.execute(_CREATE_DEALS_SQL)
+            account_expr = "account_id" if had_account_id else "''"
+            conn.execute(f"""
+                INSERT INTO deals (account_id, ticket, symbol, side, volume, price_open,
+                                    price_close, profit, swap, commission, time_open, time_close)
+                SELECT {account_expr}, ticket, symbol, side, volume, price_open, price_close,
+                       profit, swap, commission, time_open, time_close
+                FROM deals_old
+            """)
+            conn.execute("DROP TABLE deals_old")
     conn.commit()
     conn.close()
 
 
-def upsert_deal(deal: dict, db_path: Path = DB_PATH) -> None:
-    """Insert a closed deal, or replace it if the ticket (=position id)
-    was already recorded (e.g. a later partial close updates the totals,
-    or the EA resent it after a reconnect)."""
+def upsert_deal(account_id: str, deal: dict, db_path: Path = DB_PATH) -> None:
+    """Insert a closed deal, or replace it if (account_id, ticket) was
+    already recorded (e.g. a later partial close updates the totals, or
+    the EA resent it after a reconnect)."""
     conn = get_connection(db_path)
     conn.execute("""
-        INSERT INTO deals (ticket, symbol, side, volume, price_open, price_close,
+        INSERT INTO deals (account_id, ticket, symbol, side, volume, price_open, price_close,
                             profit, swap, commission, time_open, time_close)
-        VALUES (:ticket, :symbol, :side, :volume, :price_open, :price_close,
+        VALUES (:account_id, :ticket, :symbol, :side, :volume, :price_open, :price_close,
                 :profit, :swap, :commission, :time_open, :time_close)
-        ON CONFLICT(ticket) DO UPDATE SET
+        ON CONFLICT(account_id, ticket) DO UPDATE SET
             symbol=excluded.symbol, side=excluded.side, volume=excluded.volume,
             price_open=excluded.price_open, price_close=excluded.price_close,
             profit=excluded.profit, swap=excluded.swap, commission=excluded.commission,
             time_open=excluded.time_open, time_close=excluded.time_close
-    """, deal)
+    """, {**deal, "account_id": account_id})
     conn.commit()
     conn.close()
 
 
-def insights(bucket: str, limit_periods: int = 30, db_path: Path = DB_PATH) -> list[dict]:
+def insights(account_id: str, bucket: str, limit_periods: int = 30, db_path: Path = DB_PATH) -> list[dict]:
     """One row per (period, side): trade count, volume, net profit, wins.
     `bucket` is one of BUCKET_FORMATS' keys (minute/hour/day/month/year)."""
     fmt = BUCKET_FORMATS.get(bucket, BUCKET_FORMATS["day"])
@@ -80,16 +111,17 @@ def insights(bucket: str, limit_periods: int = 30, db_path: Path = DB_PATH) -> l
                 SUM(profit + swap + commission) AS profit,
                 SUM(CASE WHEN profit + swap + commission > 0 THEN 1 ELSE 0 END) AS wins
             FROM deals
+            WHERE account_id = ?
             GROUP BY period, side
         )
         ORDER BY period DESC
         LIMIT ?
-    """, (limit_periods * 2,)).fetchall()  # *2: a BUY row and a SELL row per period
+    """, (account_id, limit_periods * 2)).fetchall()  # *2: a BUY row and a SELL row per period
     conn.close()
     return [dict(r) for r in rows]
 
 
-def summary(db_path: Path = DB_PATH) -> dict:
+def summary(account_id: str, db_path: Path = DB_PATH) -> dict:
     conn = get_connection(db_path)
     row = conn.execute("""
         SELECT
@@ -99,7 +131,8 @@ def summary(db_path: Path = DB_PATH) -> dict:
             COALESCE(SUM(CASE WHEN profit + swap + commission > 0 THEN profit + swap + commission ELSE 0 END), 0) AS gross_profit,
             COALESCE(SUM(CASE WHEN profit + swap + commission < 0 THEN -(profit + swap + commission) ELSE 0 END), 0) AS gross_loss
         FROM deals
-    """).fetchone()
+        WHERE account_id = ?
+    """, (account_id,)).fetchone()
     conn.close()
 
     d = dict(row)
