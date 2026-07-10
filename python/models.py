@@ -14,6 +14,7 @@ class Position:
     profit: float
     swap: float
     time_open: int
+    magic: int = 0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -31,4 +32,5 @@ class Position:
             profit=float(message.get("profit", 0.0)),
             swap=float(message.get("swap", 0.0)),
             time_open=int(message.get("time_open", 0)),
+            magic=int(message.get("magic", 0)),
         )

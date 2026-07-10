@@ -54,6 +54,10 @@ class CloseByThresholdRequest(BaseModel):
     amount: float
 
 
+class MagicRequest(BaseModel):
+    magic: int
+
+
 def _account_response(store: PositionStore, account_store: AccountStore) -> dict:
     positions = store.snapshot()
     buy = [p for p in positions if p["side"] == "BUY"]
@@ -147,6 +151,13 @@ def create_app(store: PositionStore, gateway: TradeGateway,
         result = await gateway.modify_position(ticket, req.sl, req.tp)
         if not result.get("ok"):
             raise HTTPException(400, result.get("error", "modify failed"))
+        return result
+
+    @app.post("/api/magic")
+    async def set_magic(req: MagicRequest):
+        result = await gateway.set_magic(req.magic)
+        if not result.get("ok"):
+            raise HTTPException(400, result.get("error", "set magic failed"))
         return result
 
     @app.websocket("/ws/positions")

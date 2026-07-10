@@ -40,6 +40,9 @@
   th, td { padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
   th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
   th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  th.sortable { cursor: pointer; user-select: none; }
+  th.sortable:hover { color: var(--text); }
+  .sort-arrow { display: inline-block; width: 10px; font-size: 10px; }
   .buy { color: var(--series-buy); }
   .sell { color: var(--series-sell); }
   .profit-pos { color: var(--green); }
@@ -105,6 +108,11 @@
       <input id="q_lot" type="number" step="0.01" min="0.01" value="0.01" style="width:80px" placeholder="Lot" />
       <button class="buy-btn" onclick="quickOrder('BUY')">BUY</button>
       <button class="sell-btn" onclick="quickOrder('SELL')">SELL</button>
+      <span style="flex:1"></span>
+      <label style="font-size:12px;color:var(--muted)">Magic Number</label>
+      <input id="magicInput" type="number" step="1" style="width:110px" />
+      <button class="secondary" onclick="saveMagic()">Lưu</button>
+      <span id="magicCurrent" style="font-size:12px;color:var(--muted)"></span>
     </div>
     <div class="toolbar">
       <button onclick="openOrderModal()">+ Thêm lệnh</button>
@@ -126,13 +134,19 @@
     <div id="summary">
       <span>Số lệnh: <b id="posCount">0</b></span>
       <span>Tổng lãi/lỗ: <b id="totalProfit">0.00</b></span>
+      <span style="flex:1"></span>
+      <input id="ticketFilter" type="text" placeholder="Lọc theo ticket..." style="width:160px" oninput="renderPositions()" />
     </div>
     <div style="overflow-x:auto; margin-top:10px">
       <table>
         <thead>
           <tr>
-            <th>Ticket</th><th>Symbol</th><th>Volume</th><th>Giá vào</th>
-            <th>SL</th><th>TP</th><th>Profit</th><th>Sửa SL/TP</th><th></th>
+            <th>Ticket</th><th>Symbol</th><th>Volume</th>
+            <th class="sortable" onclick="setSort('price_open')">Giá vào<span class="sort-arrow" id="sort_price_open"></span></th>
+            <th class="sortable" onclick="setSort('time_open')">Thời gian<span class="sort-arrow" id="sort_time_open"></span></th>
+            <th>SL</th><th>TP</th>
+            <th class="sortable" onclick="setSort('profit')">Profit<span class="sort-arrow" id="sort_profit"></span></th>
+            <th>Sửa SL/TP</th><th></th>
           </tr>
         </thead>
         <tbody id="positionsBody"></tbody>
@@ -255,19 +269,67 @@ function fmt(n, digits) {
   return Number(n).toFixed(digits === undefined ? 2 : digits);
 }
 
-function renderPositions(positions, totalProfit) {
-  document.getElementById('posCount').textContent = positions.length;
-  const totalEl = document.getElementById('totalProfit');
-  totalEl.textContent = fmt(totalProfit);
-  totalEl.className = totalProfit >= 0 ? 'profit-pos' : 'profit-neg';
+function fmtTime(ts) {
+  if (!ts) return '-';
+  const d = new Date(ts * 1000);
+  const pad = n => String(n).padStart(2, '0');
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
 
-  emptyEl.style.display = positions.length ? 'none' : 'block';
-  bodyEl.innerHTML = positions.map(p => `
+let lastPositions = [];
+let lastTotalProfit = 0;
+let sortField = null;
+let sortDir = 'asc';
+
+function setSort(field) {
+  if (sortField === field) {
+    sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    sortField = field;
+    sortDir = 'asc';
+  }
+  renderPositions();
+}
+
+function sortValue(p, field) {
+  return field === 'profit' ? (p.profit || 0) + (p.swap || 0) : p[field];
+}
+
+function updateSortIndicators() {
+  for (const field of ['price_open', 'time_open', 'profit']) {
+    const el = document.getElementById(`sort_${field}`);
+    el.textContent = field === sortField ? (sortDir === 'asc' ? '▲' : '▼') : '';
+  }
+}
+
+function renderPositions() {
+  document.getElementById('posCount').textContent = lastPositions.length;
+  const totalEl = document.getElementById('totalProfit');
+  totalEl.textContent = fmt(lastTotalProfit);
+  totalEl.className = lastTotalProfit >= 0 ? 'profit-pos' : 'profit-neg';
+
+  let rows = lastPositions.slice();
+  const ticketFilter = document.getElementById('ticketFilter').value.trim();
+  if (ticketFilter) {
+    rows = rows.filter(p => String(p.ticket).includes(ticketFilter));
+  }
+  if (sortField) {
+    rows.sort((a, b) => {
+      const av = sortValue(a, sortField), bv = sortValue(b, sortField);
+      const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+  }
+  updateSortIndicators();
+
+  emptyEl.style.display = rows.length ? 'none' : 'block';
+  bodyEl.innerHTML = rows.map(p => `
     <tr data-ticket="${p.ticket}">
       <td>${p.ticket}</td>
       <td><span class="${p.side === 'BUY' ? 'buy' : 'sell'}">${p.side}</span> ${p.symbol}</td>
       <td>${fmt(p.volume, 2)}</td>
       <td>${fmt(p.price_open, 5)}</td>
+      <td>${fmtTime(p.time_open)}</td>
       <td>${fmt(p.sl, 5)}</td>
       <td>${fmt(p.tp, 5)}</td>
       <td class="${p.profit >= 0 ? 'profit-pos' : 'profit-neg'}">${fmt(p.profit + p.swap)}</td>
@@ -369,7 +431,9 @@ function connectWs() {
   ws.onerror = () => ws.close();
   ws.onmessage = (ev) => {
     const data = JSON.parse(ev.data);
-    renderPositions(data.positions, data.total_profit);
+    lastPositions = data.positions;
+    lastTotalProfit = data.total_profit;
+    renderPositions();
   };
 }
 connectWs();
@@ -388,6 +452,21 @@ function renderAccount(data) {
 
   document.getElementById('acc_buy').textContent = `${data.open_buy_count || 0} (${fmt(data.open_buy_volume || 0)} lot)`;
   document.getElementById('acc_sell').textContent = `${data.open_sell_count || 0} (${fmt(data.open_sell_volume || 0)} lot)`;
+
+  const magicEl = document.getElementById('magicInput');
+  magicEl.placeholder = String(data.magic ?? '-');
+  document.getElementById('magicCurrent').textContent = `Hiện tại: ${data.magic ?? '-'}`;
+}
+
+async function saveMagic() {
+  const raw = document.getElementById('magicInput').value;
+  const magic = parseInt(raw, 10);
+  if (raw === '' || isNaN(magic)) { toast('Nhập magic number hợp lệ', true); return; }
+  try {
+    await api('/api/magic', 'POST', {magic});
+    toast(`Đã đặt Magic Number = ${magic}`);
+    document.getElementById('magicInput').value = '';
+  } catch (e) { toast(e.message, true); }
 }
 
 function connectAccountWs() {

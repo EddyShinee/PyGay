@@ -20,7 +20,7 @@ import db
 
 logger = logging.getLogger("handlers")
 
-ACCOUNT_FIELDS = ("balance", "equity", "margin", "margin_free", "margin_level", "currency", "leverage")
+ACCOUNT_FIELDS = ("balance", "equity", "margin", "margin_free", "margin_level", "currency", "leverage", "magic")
 
 
 def register(server: SocketServer, store: PositionStore, gateway: TradeGateway,

@@ -67,6 +67,9 @@ class TradeGateway:
     async def modify_position(self, ticket: int, sl: float, tp: float) -> dict:
         return await self._send({"type": "modify_position", "ticket": ticket, "sl": sl, "tp": tp})
 
+    async def set_magic(self, magic: int) -> dict:
+        return await self._send({"type": "set_magic", "magic": magic})
+
     async def request_positions(self) -> None:
         """Fire-and-forget: EA replies with a positions_begin/.../positions_end
         burst handled by handlers.py, not a single order_result."""

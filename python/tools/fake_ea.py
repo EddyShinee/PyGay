@@ -31,6 +31,7 @@ class FakeEA:
         self.bid = 1.08500
         self.ask = 1.08520
         self.balance = 10000.0
+        self.magic = 123456
 
     def step_price(self) -> None:
         drift = random.uniform(-0.00006, 0.00006)
@@ -47,7 +48,7 @@ class FakeEA:
         self.positions[ticket] = {
             "ticket": ticket, "symbol": SYMBOL, "side": side, "volume": volume,
             "price_open": price, "sl": sl or 0, "tp": tp or 0,
-            "profit": 0.0, "swap": 0.0, "time_open": int(time.time()),
+            "profit": 0.0, "swap": 0.0, "time_open": int(time.time()), "magic": self.magic,
         }
         log.info("opened #%s %s %.2f lot @ %.5f", ticket, side, volume, price)
         return ticket
@@ -89,6 +90,7 @@ class FakeEA:
             "type": "account", "balance": round(self.balance, 2), "equity": round(equity, 2),
             "margin": round(margin, 2), "margin_free": round(margin_free, 2),
             "margin_level": round(margin_level, 2), "currency": "USD", "leverage": 100,
+            "magic": self.magic,
         }
 
 
@@ -152,6 +154,12 @@ async def main() -> None:
 
         elif msg_type == "get_positions":
             await send_snapshot()
+
+        elif msg_type == "set_magic":
+            ea.magic = int(msg.get("magic", ea.magic))
+            log.info("magic number set to %s", ea.magic)
+            await send({"type": "order_result", "id": req_id, "ok": True, "ticket": 0})
+            await send(ea.account_message())
 
         elif msg_type == "signal":
             action = msg.get("action")
