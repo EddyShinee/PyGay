@@ -68,6 +68,9 @@ class SocketServer:
             except Exception:
                 logger.exception("broadcast failed for %s", client.address)
 
+    def clients(self) -> list[Client]:
+        return list(self._clients)
+
     async def start(self) -> None:
         self._server = await asyncio.start_server(self._handle_client, self.host, self.port)
         logger.info("listening on %s:%s", self.host, self.port)

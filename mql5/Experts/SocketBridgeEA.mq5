@@ -3,7 +3,8 @@
 //| Bridges MT5 <-> Python over TCP (Python runs the server).        |
 //| - OnTick():  pushes the latest tick to Python immediately.       |
 //| - OnTimer(): polls the socket for incoming messages (non-        |
-//|              blocking) and reconnects if the link drops.         |
+//|              blocking), reconnects if the link drops, and pushes |
+//|              a full position snapshot every InpPositionsIntervalMs.|
 //| To extend: add a new "type" branch in HandleMessage().           |
 //+------------------------------------------------------------------+
 #property strict
@@ -11,15 +12,18 @@
 #include <Socket.mqh>
 #include <Json.mqh>
 
-input string InpHost        = "127.0.0.1";
-input int    InpPort        = 9090;
-input int    InpPollMs      = 20;    // socket poll interval (ms) - lower = lower latency
-input int    InpReconnectS  = 3;     // reconnect retry interval (s) while disconnected
+input string InpHost               = "127.0.0.1";
+input int    InpPort               = 9090;
+input int    InpPollMs             = 20;     // socket poll interval (ms) - lower = lower latency
+input int    InpReconnectS         = 3;      // reconnect retry interval (s) while disconnected
+input int    InpPositionsIntervalMs = 1000;  // how often to push a full positions snapshot
 
 CSocket  g_socket;
 CTrade   g_trade;
 string   g_rx_buffer = "";
 datetime g_last_reconnect_attempt = 0;
+ulong    g_last_positions_ms = 0;
+int      g_last_history_total = 0;
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -52,13 +56,15 @@ void OnTick()
    msg.AddString("symbol", _Symbol);
    msg.AddDouble("bid", tick.bid, _Digits);
    msg.AddDouble("ask", tick.ask, _Digits);
+   msg.AddDouble("point", SymbolInfoDouble(_Symbol, SYMBOL_POINT), 8);
    msg.AddInt("time", (long)tick.time);
 
    g_socket.Send(msg.Serialize() + "\n");
 }
 
 //+------------------------------------------------------------------+
-//| Poll the socket for incoming data; reconnect if disconnected     |
+//| Poll the socket for incoming data; reconnect if disconnected;    |
+//| push a positions snapshot on its own interval                   |
 //+------------------------------------------------------------------+
 void OnTimer()
 {
@@ -76,6 +82,14 @@ void OnTimer()
    }
 
    DrainMessages();
+
+   if(GetTickCount64() - g_last_positions_ms >= (ulong)InpPositionsIntervalMs)
+   {
+      SendPositionsSnapshot();
+      SendAccountInfo();
+      SyncClosedDeals();
+      g_last_positions_ms = GetTickCount64();
+   }
 }
 
 void TryConnect()
@@ -119,31 +133,290 @@ void HandleMessage(CJson &msg)
 
    if(type == "pong")
       return; // heartbeat reply, nothing to do
-
    if(type == "signal")
-   {
-      HandleSignal(msg);
-      return;
-   }
+      { HandleSignal(msg); return; }
+   if(type == "get_positions")
+      { SendPositionsSnapshot(); return; }
+   if(type == "open_order")
+      { HandleOpenOrder(msg); return; }
+   if(type == "close_position")
+      { HandleClosePosition(msg); return; }
+   if(type == "close_all")
+      { HandleCloseAll(msg); return; }
+   if(type == "modify_position")
+      { HandleModifyPosition(msg); return; }
 
    Print("SocketBridgeEA: unknown message type: ", type);
 }
 
 //+------------------------------------------------------------------+
-//| Example trading action - extend with your own order logic        |
+//| Shared market-order execution, used by both the automatic        |
+//| "signal" path and the manual/web "open_order" path                |
+//+------------------------------------------------------------------+
+bool ExecuteMarketOrder(const string side, const string symbol, const double volume,
+                         const double sl, const double tp, ulong &out_ticket)
+{
+   bool ok;
+   if(side == "BUY")
+      ok = g_trade.Buy(volume, symbol, 0.0, sl, tp);
+   else if(side == "SELL")
+      ok = g_trade.Sell(volume, symbol, 0.0, sl, tp);
+   else
+   {
+      Print("SocketBridgeEA: unknown side: ", side);
+      return false;
+   }
+   out_ticket = ok ? g_trade.ResultOrder() : 0;
+   return ok;
+}
+
+void SendOrderResult(const string id, const bool ok, const ulong ticket, const string error)
+{
+   CJson msg;
+   msg.AddString("type", "order_result");
+   msg.AddString("id", id);
+   msg.AddBool("ok", ok);
+   msg.AddInt("ticket", (long)ticket);
+   msg.AddString("error", error);
+   g_socket.Send(msg.Serialize() + "\n");
+}
+
+//+------------------------------------------------------------------+
+//| Automatic order from the ML-model/strategy path (Python "signal")|
 //+------------------------------------------------------------------+
 void HandleSignal(CJson &msg)
 {
    string action = msg.GetString("action");
    string symbol = msg.GetString("symbol", _Symbol);
    double volume = msg.GetDouble("volume", 0.01);
+   double sl     = msg.GetDouble("sl", 0.0);
+   double tp     = msg.GetDouble("tp", 0.0);
 
-   if(action == "BUY")
-      g_trade.Buy(volume, symbol);
-   else if(action == "SELL")
-      g_trade.Sell(volume, symbol);
-   else if(action == "CLOSE")
+   if(action == "CLOSE")
+   {
       g_trade.PositionClose(symbol);
+      return;
+   }
+
+   ulong ticket = 0;
+   if(action == "BUY" || action == "SELL")
+      ExecuteMarketOrder(action, symbol, volume, sl, tp, ticket);
    else
       Print("SocketBridgeEA: unknown action: ", action);
+}
+
+//+------------------------------------------------------------------+
+//| Manual/web order placement (Python "open_order")                  |
+//+------------------------------------------------------------------+
+void HandleOpenOrder(CJson &msg)
+{
+   string id     = msg.GetString("id");
+   string side   = msg.GetString("side");
+   string symbol = msg.GetString("symbol", _Symbol);
+   double volume = msg.GetDouble("volume", 0.01);
+   double sl     = msg.GetDouble("sl", 0.0);
+   double tp     = msg.GetDouble("tp", 0.0);
+
+   ulong ticket = 0;
+   bool ok = ExecuteMarketOrder(side, symbol, volume, sl, tp, ticket);
+   SendOrderResult(id, ok, ticket, ok ? "" : g_trade.ResultRetcodeDescription());
+}
+
+void HandleClosePosition(CJson &msg)
+{
+   string id     = msg.GetString("id");
+   ulong  ticket = (ulong)msg.GetInt("ticket");
+
+   bool ok = g_trade.PositionClose(ticket);
+   SendOrderResult(id, ok, ticket, ok ? "" : g_trade.ResultRetcodeDescription());
+}
+
+void HandleCloseAll(CJson &msg)
+{
+   string id     = msg.GetString("id");
+   string filter = msg.GetString("filter", "all");
+
+   bool   all_ok    = true;
+   string last_error = "";
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+
+      double profit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      bool matches = (filter == "all") ||
+                      (filter == "profit" && profit > 0) ||
+                      (filter == "loss"   && profit < 0);
+      if(!matches)
+         continue;
+
+      if(!g_trade.PositionClose(ticket))
+      {
+         all_ok = false;
+         last_error = g_trade.ResultRetcodeDescription();
+      }
+   }
+
+   SendOrderResult(id, all_ok, 0, last_error);
+}
+
+void HandleModifyPosition(CJson &msg)
+{
+   string id     = msg.GetString("id");
+   ulong  ticket = (ulong)msg.GetInt("ticket");
+   double sl     = msg.GetDouble("sl", 0.0);
+   double tp     = msg.GetDouble("tp", 0.0);
+
+   bool ok = g_trade.PositionModify(ticket, sl, tp);
+   SendOrderResult(id, ok, ticket, ok ? "" : g_trade.ResultRetcodeDescription());
+}
+
+//+------------------------------------------------------------------+
+//| Full snapshot of open positions, framed by positions_begin/end   |
+//+------------------------------------------------------------------+
+void SendPositionsSnapshot()
+{
+   int total = PositionsTotal();
+
+   CJson begin;
+   begin.AddString("type", "positions_begin");
+   begin.AddInt("count", total);
+   g_socket.Send(begin.Serialize() + "\n");
+
+   for(int i = 0; i < total; i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      int    digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+      bool   is_buy = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY);
+
+      CJson msg;
+      msg.AddString("type", "position");
+      msg.AddInt("ticket", (long)ticket);
+      msg.AddString("symbol", symbol);
+      msg.AddString("side", is_buy ? "BUY" : "SELL");
+      msg.AddDouble("volume", PositionGetDouble(POSITION_VOLUME), 2);
+      msg.AddDouble("price_open", PositionGetDouble(POSITION_PRICE_OPEN), digits);
+      msg.AddDouble("sl", PositionGetDouble(POSITION_SL), digits);
+      msg.AddDouble("tp", PositionGetDouble(POSITION_TP), digits);
+      msg.AddDouble("profit", PositionGetDouble(POSITION_PROFIT), 2);
+      msg.AddDouble("swap", PositionGetDouble(POSITION_SWAP), 2);
+      msg.AddInt("time_open", (long)PositionGetInteger(POSITION_TIME));
+      g_socket.Send(msg.Serialize() + "\n");
+   }
+
+   CJson end;
+   end.AddString("type", "positions_end");
+   g_socket.Send(end.Serialize() + "\n");
+}
+
+//+------------------------------------------------------------------+
+//| Account snapshot (balance/equity/margin/...)                     |
+//+------------------------------------------------------------------+
+void SendAccountInfo()
+{
+   CJson msg;
+   msg.AddString("type", "account");
+   msg.AddDouble("balance", AccountInfoDouble(ACCOUNT_BALANCE), 2);
+   msg.AddDouble("equity", AccountInfoDouble(ACCOUNT_EQUITY), 2);
+   msg.AddDouble("margin", AccountInfoDouble(ACCOUNT_MARGIN), 2);
+   msg.AddDouble("margin_free", AccountInfoDouble(ACCOUNT_MARGIN_FREE), 2);
+   msg.AddDouble("margin_level", AccountInfoDouble(ACCOUNT_MARGIN_LEVEL), 2);
+   msg.AddString("currency", AccountInfoString(ACCOUNT_CURRENCY));
+   msg.AddInt("leverage", AccountInfoInteger(ACCOUNT_LEVERAGE));
+   g_socket.Send(msg.Serialize() + "\n");
+}
+
+//+------------------------------------------------------------------+
+//| Detect newly closed positions since the last check and report    |
+//| each one as a "deal_closed" message (only deals closed after the |
+//| EA connected - no retroactive backfill of old history).          |
+//+------------------------------------------------------------------+
+void SyncClosedDeals()
+{
+   if(!HistorySelect(0, TimeCurrent()))
+      return;
+
+   int total = HistoryDealsTotal();
+   if(total <= g_last_history_total)
+      return;
+
+   long new_position_ids[];
+   int  new_count = 0;
+   for(int i = g_last_history_total; i < total; i++)
+   {
+      ulong deal_ticket = HistoryDealGetTicket(i);
+      if(deal_ticket == 0)
+         continue;
+      if((ENUM_DEAL_ENTRY)HistoryDealGetInteger(deal_ticket, DEAL_ENTRY) != DEAL_ENTRY_OUT)
+         continue;
+
+      ArrayResize(new_position_ids, new_count + 1);
+      new_position_ids[new_count++] = (long)HistoryDealGetInteger(deal_ticket, DEAL_POSITION_ID);
+   }
+   g_last_history_total = total;
+
+   for(int i = 0; i < new_count; i++)
+      SendClosedDeal(new_position_ids[i]);
+
+   // HistorySelectByPosition (inside SendClosedDeal) replaces the selected
+   // history set, so restore the general one for the next call.
+   HistorySelect(0, TimeCurrent());
+}
+
+void SendClosedDeal(const long position_id)
+{
+   if(!HistorySelectByPosition(position_id))
+      return;
+
+   int   total     = HistoryDealsTotal();
+   ulong in_ticket  = 0;
+   ulong out_ticket = 0;
+   double profit = 0, swap = 0, commission = 0, volume = 0;
+
+   for(int i = 0; i < total; i++)
+   {
+      ulong t = HistoryDealGetTicket(i);
+      if(t == 0)
+         continue;
+      ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(t, DEAL_ENTRY);
+      if(entry == DEAL_ENTRY_IN && in_ticket == 0)
+         in_ticket = t;
+      if(entry == DEAL_ENTRY_OUT)
+      {
+         out_ticket = t; // covers partial closes: keep the latest, sum totals below
+         profit     += HistoryDealGetDouble(t, DEAL_PROFIT);
+         swap       += HistoryDealGetDouble(t, DEAL_SWAP);
+         commission += HistoryDealGetDouble(t, DEAL_COMMISSION);
+         volume     += HistoryDealGetDouble(t, DEAL_VOLUME);
+      }
+   }
+   if(in_ticket == 0 || out_ticket == 0)
+      return;
+
+   string symbol = HistoryDealGetString(out_ticket, DEAL_SYMBOL);
+   int    digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+   // Closing a BUY position produces a SELL deal and vice versa.
+   ENUM_DEAL_TYPE out_type = (ENUM_DEAL_TYPE)HistoryDealGetInteger(out_ticket, DEAL_TYPE);
+   string side = (out_type == DEAL_TYPE_SELL) ? "BUY" : "SELL";
+
+   CJson msg;
+   msg.AddString("type", "deal_closed");
+   msg.AddInt("ticket", position_id);
+   msg.AddString("symbol", symbol);
+   msg.AddString("side", side);
+   msg.AddDouble("volume", volume, 2);
+   msg.AddDouble("price_open", HistoryDealGetDouble(in_ticket, DEAL_PRICE), digits);
+   msg.AddDouble("price_close", HistoryDealGetDouble(out_ticket, DEAL_PRICE), digits);
+   msg.AddDouble("profit", profit, 2);
+   msg.AddDouble("swap", swap, 2);
+   msg.AddDouble("commission", commission, 2);
+   msg.AddInt("time_open", (long)HistoryDealGetInteger(in_ticket, DEAL_TIME));
+   msg.AddInt("time_close", (long)HistoryDealGetInteger(out_ticket, DEAL_TIME));
+   g_socket.Send(msg.Serialize() + "\n");
 }

@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MT5 Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1420; --panel: #161d2e; --border: #2a3348; --text: #e6e9f0;
+    --muted: #8a93a8; --accent: #4d8dff;
+    /* status = lãi/lỗ (polarity); series-buy/sell = định danh BUY/SELL (identity) -
+       tách riêng hai kênh màu để không nhầm SELL với "xấu" hay BUY với "tốt" */
+    --green: #0ca30c; --red: #d03b3b;
+    --series-buy: #3987e5; --series-sell: #d95926;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+         background: var(--bg); color: var(--text); font-size: 14px; }
+  header { display: flex; align-items: center; justify-content: space-between;
+           padding: 14px 20px; border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  #status { font-size: 12px; padding: 3px 10px; border-radius: 10px; }
+  #status.up { background: rgba(46,204,113,.15); color: var(--green); }
+  #status.down { background: rgba(255,92,92,.15); color: var(--red); }
+  main { padding: 20px; max-width: 1100px; margin: 0 auto; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+           padding: 16px; margin-bottom: 16px; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button { background: var(--accent); color: #fff; border: none; border-radius: 6px;
+           padding: 7px 14px; font-size: 13px; cursor: pointer; }
+  button.secondary { background: #2a3348; }
+  button.danger { background: var(--red); }
+  button.buy-btn { background: var(--series-buy); font-weight: 600; padding: 7px 20px; }
+  button.sell-btn { background: var(--series-sell); font-weight: 600; padding: 7px 20px; }
+  button.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  button:hover { filter: brightness(1.1); }
+  input, select { background: #0f1420; border: 1px solid var(--border); color: var(--text);
+                  border-radius: 6px; padding: 6px 8px; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  .buy { color: var(--series-buy); }
+  .sell { color: var(--series-sell); }
+  .profit-pos { color: var(--green); }
+  .profit-neg { color: var(--red); }
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+  .stat-tile { background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 8px;
+               padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+  .stat-label { font-size: 11px; color: var(--muted); }
+  .stat-label.buy { color: var(--series-buy); }
+  .stat-label.sell { color: var(--series-sell); }
+  .stat-value { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .bar-cell { position: relative; display: flex; align-items: center; justify-content: flex-end;
+              min-width: 100px; height: 22px; }
+  .bar-fill { position: absolute; left: 0; top: 2px; bottom: 2px; border-radius: 3px; opacity: .35; z-index: 0; }
+  .bar-cell span { position: relative; z-index: 1; font-variant-numeric: tabular-nums; padding-right: 4px; }
+  .sltp-input { width: 80px; }
+  .row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+  #summary { display: flex; gap: 20px; font-size: 13px; color: var(--muted); }
+  #summary b { color: var(--text); }
+  .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5);
+                     align-items: center; justify-content: center; z-index: 10; }
+  .modal-backdrop.open { display: flex; }
+  .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+           padding: 20px; width: 420px; max-width: 92vw; }
+  .modal h2 { margin: 0 0 14px; font-size: 15px; }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+  .form-grid label.full { grid-column: 1 / -1; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  #toast { position: fixed; bottom: 20px; right: 20px; background: var(--panel);
+           border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px;
+           display: none; max-width: 360px; }
+  #toast.error { border-color: var(--red); color: var(--red); }
+  #toast.show { display: block; }
+  .empty { color: var(--muted); text-align: center; padding: 20px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>MT5 Dashboard</h1>
+  <span id="status" class="down">Đang kết nối...</span>
+</header>
+
+<main>
+  <div class="panel">
+    <div class="stat-grid">
+      <div class="stat-tile"><span class="stat-label">Balance</span><span class="stat-value" id="acc_balance">-</span></div>
+      <div class="stat-tile"><span class="stat-label">Equity</span><span class="stat-value" id="acc_equity">-</span></div>
+      <div class="stat-tile"><span class="stat-label">Margin</span><span class="stat-value" id="acc_margin">-</span></div>
+      <div class="stat-tile"><span class="stat-label">Free Margin</span><span class="stat-value" id="acc_margin_free">-</span></div>
+      <div class="stat-tile"><span class="stat-label">Margin Level</span><span class="stat-value" id="acc_margin_level">-</span></div>
+      <div class="stat-tile"><span class="stat-label">Lãi/lỗ trôi nổi</span><span class="stat-value" id="acc_floating">-</span></div>
+      <div class="stat-tile"><span class="stat-label buy">Lệnh BUY đang mở</span><span class="stat-value" id="acc_buy">0</span></div>
+      <div class="stat-tile"><span class="stat-label sell">Lệnh SELL đang mở</span><span class="stat-value" id="acc_sell">0</span></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="toolbar" style="margin-bottom:10px">
+      <label style="font-size:12px;color:var(--muted)">Lệnh nhanh</label>
+      <input id="q_symbol" type="text" value="EURUSD" style="width:90px" />
+      <input id="q_lot" type="number" step="0.01" min="0.01" value="0.01" style="width:80px" placeholder="Lot" />
+      <button class="buy-btn" onclick="quickOrder('BUY')">BUY</button>
+      <button class="sell-btn" onclick="quickOrder('SELL')">SELL</button>
+    </div>
+    <div class="toolbar">
+      <button onclick="openOrderModal()">+ Thêm lệnh</button>
+      <button class="secondary" onclick="refreshPositions()">Làm mới</button>
+      <span style="flex:1"></span>
+      <button class="secondary" onclick="closeAll('profit')">Đóng tất cả lệnh lãi</button>
+      <button class="secondary" onclick="closeAll('loss')">Đóng tất cả lệnh lỗ</button>
+      <button class="danger" onclick="closeAll('all')">Đóng tất cả</button>
+    </div>
+    <div class="toolbar" style="margin-top:10px">
+      <label style="font-size:12px;color:var(--muted)">Đóng tất cả khi tổng lãi/lỗ</label>
+      <select id="thresholdOp"><option value=">=">&ge;</option><option value="<=">&le;</option></select>
+      <input id="thresholdAmount" type="number" step="0.01" placeholder="USD" style="width:100px" />
+      <button class="secondary" onclick="closeByThreshold()">Kiểm tra &amp; đóng</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div id="summary">
+      <span>Số lệnh: <b id="posCount">0</b></span>
+      <span>Tổng lãi/lỗ: <b id="totalProfit">0.00</b></span>
+    </div>
+    <div style="overflow-x:auto; margin-top:10px">
+      <table>
+        <thead>
+          <tr>
+            <th>Ticket</th><th>Symbol</th><th>Volume</th><th>Giá vào</th>
+            <th>SL</th><th>TP</th><th>Profit</th><th>Sửa SL/TP</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="positionsBody"></tbody>
+      </table>
+      <div id="emptyMsg" class="empty" style="display:none">Chưa có lệnh nào đang mở.</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="toolbar">
+      <label style="font-size:12px;color:var(--muted)">Insight theo</label>
+      <select id="insightBucket" onchange="loadInsights()">
+        <option value="minute">Phút</option>
+        <option value="hour">Giờ</option>
+        <option value="day" selected>Ngày</option>
+        <option value="month">Tháng</option>
+        <option value="year">Năm</option>
+      </select>
+      <span style="flex:1"></span>
+      <span id="summaryLine" style="font-size:12px;color:var(--muted)"></span>
+    </div>
+    <div style="overflow-x:auto; margin-top:10px">
+      <table>
+        <thead>
+          <tr>
+            <th>Thời gian</th>
+            <th class="buy">BUY (lệnh)</th><th>BUY lãi/lỗ</th>
+            <th class="sell">SELL (lệnh)</th><th>SELL lãi/lỗ</th>
+            <th>Tổng</th>
+          </tr>
+        </thead>
+        <tbody id="insightBody"></tbody>
+      </table>
+      <div id="insightEmpty" class="empty" style="display:none">Chưa có lệnh nào đã đóng.</div>
+    </div>
+  </div>
+</main>
+
+<div class="modal-backdrop" id="orderModal">
+  <div class="modal">
+    <h2>Thêm lệnh</h2>
+    <div class="form-grid">
+      <label>Symbol
+        <input id="f_symbol" type="text" value="EURUSD" />
+      </label>
+      <label>Hướng lệnh
+        <select id="f_side"><option value="BUY">BUY</option><option value="SELL">SELL</option></select>
+      </label>
+      <label>Khối lượng (lot)
+        <input id="f_volume" type="number" step="0.01" value="0.01" />
+      </label>
+      <label>Số lệnh (count)
+        <input id="f_count" type="number" step="1" min="1" value="1" />
+      </label>
+      <label>SL (points, 0 = không đặt)
+        <input id="f_sl" type="number" step="1" value="0" />
+      </label>
+      <label>TP (points, 0 = không đặt)
+        <input id="f_tp" type="number" step="1" value="0" />
+      </label>
+      <label>Cách nhau (points)
+        <input id="f_spacing" type="number" step="1" value="100" />
+      </label>
+      <label>Mở cách nhau (giây)
+        <input id="f_delay" type="number" step="1" value="10" />
+      </label>
+      <label>Hướng giãn giá
+        <select id="f_direction">
+          <option value="against">Ngược chiều (DCA)</option>
+          <option value="with">Cùng chiều</option>
+        </select>
+      </label>
+      <label>Lot tăng dần
+        <select id="f_lotmode">
+          <option value="none">Không tăng</option>
+          <option value="add">Cộng thêm cố định</option>
+          <option value="multiply">Nhân hệ số</option>
+        </select>
+      </label>
+      <label class="full" id="lotValueWrap" style="display:none">Giá trị tăng lot
+        <input id="f_lotvalue" type="number" step="0.01" value="0" />
+      </label>
+    </div>
+    <div class="modal-actions">
+      <button class="ghost" onclick="closeOrderModal()">Hủy</button>
+      <button onclick="submitOrder()">Đặt lệnh</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const statusEl = document.getElementById('status');
+const bodyEl = document.getElementById('positionsBody');
+const emptyEl = document.getElementById('emptyMsg');
+
+function toast(msg, isError) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'show' + (isError ? ' error' : '');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.remove('show'), 4000);
+}
+
+async function api(path, method, body) {
+  const res = await fetch(path, {
+    method,
+    headers: body ? {'Content-Type': 'application/json'} : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.detail || 'Có lỗi xảy ra');
+  }
+  return data;
+}
+
+function fmt(n, digits) {
+  return Number(n).toFixed(digits === undefined ? 2 : digits);
+}
+
+function renderPositions(positions, totalProfit) {
+  document.getElementById('posCount').textContent = positions.length;
+  const totalEl = document.getElementById('totalProfit');
+  totalEl.textContent = fmt(totalProfit);
+  totalEl.className = totalProfit >= 0 ? 'profit-pos' : 'profit-neg';
+
+  emptyEl.style.display = positions.length ? 'none' : 'block';
+  bodyEl.innerHTML = positions.map(p => `
+    <tr data-ticket="${p.ticket}">
+      <td>${p.ticket}</td>
+      <td><span class="${p.side === 'BUY' ? 'buy' : 'sell'}">${p.side}</span> ${p.symbol}</td>
+      <td>${fmt(p.volume, 2)}</td>
+      <td>${fmt(p.price_open, 5)}</td>
+      <td>${fmt(p.sl, 5)}</td>
+      <td>${fmt(p.tp, 5)}</td>
+      <td class="${p.profit >= 0 ? 'profit-pos' : 'profit-neg'}">${fmt(p.profit + p.swap)}</td>
+      <td>
+        <input class="sltp-input" type="number" step="0.00001" value="${p.sl || ''}" placeholder="SL" data-field="sl" />
+        <input class="sltp-input" type="number" step="0.00001" value="${p.tp || ''}" placeholder="TP" data-field="tp" />
+        <button class="secondary" onclick="modifyPosition(${p.ticket})">Lưu</button>
+      </td>
+      <td><button class="danger" onclick="closePosition(${p.ticket})">Đóng</button></td>
+    </tr>
+  `).join('');
+}
+
+async function closePosition(ticket) {
+  try {
+    await api(`/api/positions/${ticket}/close`, 'POST');
+    toast(`Đã gửi lệnh đóng #${ticket}`);
+  } catch (e) { toast(e.message, true); }
+}
+
+async function modifyPosition(ticket) {
+  const row = document.querySelector(`tr[data-ticket="${ticket}"]`);
+  const sl = parseFloat(row.querySelector('[data-field="sl"]').value) || 0;
+  const tp = parseFloat(row.querySelector('[data-field="tp"]').value) || 0;
+  try {
+    await api(`/api/positions/${ticket}/modify`, 'POST', {sl, tp});
+    toast(`Đã cập nhật SL/TP #${ticket}`);
+  } catch (e) { toast(e.message, true); }
+}
+
+async function closeAll(filter) {
+  if (!confirm(`Xác nhận đóng tất cả lệnh (${filter})?`)) return;
+  try {
+    await api('/api/positions/close_all', 'POST', {filter});
+    toast('Đã gửi lệnh đóng');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function closeByThreshold() {
+  const op = document.getElementById('thresholdOp').value;
+  const amount = parseFloat(document.getElementById('thresholdAmount').value);
+  if (isNaN(amount)) { toast('Nhập ngưỡng USD trước', true); return; }
+  try {
+    const res = await api('/api/positions/close_by_threshold', 'POST', {op, amount});
+    toast(res.triggered ? `Đã đóng tất cả (tổng ${fmt(res.total_profit)})` : `Chưa đạt ngưỡng (hiện tại ${fmt(res.total_profit)})`);
+  } catch (e) { toast(e.message, true); }
+}
+
+async function refreshPositions() {
+  try { await api('/api/positions/refresh', 'POST'); } catch (e) { toast(e.message, true); }
+}
+
+async function quickOrder(side) {
+  const symbol = document.getElementById('q_symbol').value.trim().toUpperCase();
+  const volume = parseFloat(document.getElementById('q_lot').value);
+  if (!symbol || !volume || volume <= 0) { toast('Nhập symbol và lot hợp lệ', true); return; }
+  try {
+    await api('/api/orders', 'POST', {symbol, side, volume, count: 1});
+    toast(`Đã đặt lệnh ${side} nhanh ${fmt(volume, 2)} lot ${symbol}`);
+  } catch (e) { toast(e.message, true); }
+}
+
+function openOrderModal() { document.getElementById('orderModal').classList.add('open'); }
+function closeOrderModal() { document.getElementById('orderModal').classList.remove('open'); }
+
+document.getElementById('f_lotmode').addEventListener('change', (e) => {
+  document.getElementById('lotValueWrap').style.display = e.target.value === 'none' ? 'none' : 'block';
+});
+
+async function submitOrder() {
+  const body = {
+    symbol: document.getElementById('f_symbol').value.trim().toUpperCase(),
+    side: document.getElementById('f_side').value,
+    volume: parseFloat(document.getElementById('f_volume').value),
+    sl_points: parseFloat(document.getElementById('f_sl').value) || 0,
+    tp_points: parseFloat(document.getElementById('f_tp').value) || 0,
+    count: parseInt(document.getElementById('f_count').value, 10) || 1,
+    spacing_points: parseFloat(document.getElementById('f_spacing').value) || 0,
+    delay_seconds: parseFloat(document.getElementById('f_delay').value) || 0,
+    direction: document.getElementById('f_direction').value,
+    lot_mode: document.getElementById('f_lotmode').value,
+    lot_value: parseFloat(document.getElementById('f_lotvalue').value) || 0,
+  };
+  try {
+    await api('/api/orders', 'POST', body);
+    toast('Đã đặt lệnh');
+    closeOrderModal();
+  } catch (e) { toast(e.message, true); }
+}
+
+function connectWs() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/positions`);
+  ws.onopen = () => { statusEl.textContent = 'Đã kết nối'; statusEl.className = 'up'; };
+  ws.onclose = () => {
+    statusEl.textContent = 'Mất kết nối, đang thử lại...'; statusEl.className = 'down';
+    setTimeout(connectWs, 2000);
+  };
+  ws.onerror = () => ws.close();
+  ws.onmessage = (ev) => {
+    const data = JSON.parse(ev.data);
+    renderPositions(data.positions, data.total_profit);
+  };
+}
+connectWs();
+
+function renderAccount(data) {
+  const currency = data.currency || '';
+  document.getElementById('acc_balance').textContent = `${fmt(data.balance || 0)} ${currency}`;
+  document.getElementById('acc_equity').textContent = `${fmt(data.equity || 0)} ${currency}`;
+  document.getElementById('acc_margin').textContent = fmt(data.margin || 0);
+  document.getElementById('acc_margin_free').textContent = fmt(data.margin_free || 0);
+  document.getElementById('acc_margin_level').textContent = data.margin_level ? `${fmt(data.margin_level)}%` : '-';
+
+  const floatEl = document.getElementById('acc_floating');
+  floatEl.textContent = fmt(data.floating_profit || 0);
+  floatEl.className = 'stat-value ' + ((data.floating_profit || 0) >= 0 ? 'profit-pos' : 'profit-neg');
+
+  document.getElementById('acc_buy').textContent = `${data.open_buy_count || 0} (${fmt(data.open_buy_volume || 0)} lot)`;
+  document.getElementById('acc_sell').textContent = `${data.open_sell_count || 0} (${fmt(data.open_sell_volume || 0)} lot)`;
+}
+
+function connectAccountWs() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/account`);
+  ws.onmessage = (ev) => renderAccount(JSON.parse(ev.data));
+  ws.onclose = () => setTimeout(connectAccountWs, 2000);
+  ws.onerror = () => ws.close();
+}
+connectAccountWs();
+
+function profitBar(value, maxAbs, side) {
+  const pct = maxAbs > 0 ? Math.min(100, Math.abs(value) / maxAbs * 100) : 0;
+  const color = side === 'BUY' ? 'var(--series-buy)' : 'var(--series-sell)';
+  const textClass = value >= 0 ? 'profit-pos' : 'profit-neg';
+  return `<div class="bar-cell"><div class="bar-fill" style="width:${pct}%;background:${color}"></div><span class="${textClass}">${fmt(value)}</span></div>`;
+}
+
+function renderInsights(rows) {
+  const byPeriod = new Map();
+  let maxAbs = 0;
+  for (const r of rows) {
+    if (!byPeriod.has(r.period)) byPeriod.set(r.period, {});
+    byPeriod.get(r.period)[r.side] = r;
+    maxAbs = Math.max(maxAbs, Math.abs(r.profit || 0));
+  }
+  const periods = Array.from(byPeriod.keys());
+  document.getElementById('insightEmpty').style.display = periods.length ? 'none' : 'block';
+  document.getElementById('insightBody').innerHTML = periods.map(period => {
+    const b = byPeriod.get(period);
+    const buy = b.BUY || {trades: 0, profit: 0};
+    const sell = b.SELL || {trades: 0, profit: 0};
+    const total = (buy.profit || 0) + (sell.profit || 0);
+    return `
+      <tr>
+        <td>${period}</td>
+        <td class="buy">${buy.trades || 0}</td>
+        <td>${profitBar(buy.profit || 0, maxAbs, 'BUY')}</td>
+        <td class="sell">${sell.trades || 0}</td>
+        <td>${profitBar(sell.profit || 0, maxAbs, 'SELL')}</td>
+        <td class="${total >= 0 ? 'profit-pos' : 'profit-neg'}">${fmt(total)}</td>
+      </tr>`;
+  }).join('');
+}
+
+async function loadInsights() {
+  const bucket = document.getElementById('insightBucket').value;
+  try {
+    const data = await api(`/api/insights?bucket=${bucket}&limit=30`, 'GET');
+    renderInsights(data.rows);
+  } catch (e) { toast(e.message, true); }
+  try {
+    const s = await api('/api/summary', 'GET');
+    const pf = s.profit_factor === null || s.profit_factor === undefined ? '-' : s.profit_factor;
+    document.getElementById('summaryLine').textContent =
+      `${s.trades} lệnh đã đóng · Win rate ${s.win_rate}% · Profit factor ${pf} · Tổng PnL ${fmt(s.total_profit)}`;
+  } catch (e) { /* summary is best-effort */ }
+}
+
+loadInsights();
+setInterval(loadInsights, 15000);
+</script>
+</body>
+</html>
