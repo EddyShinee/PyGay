@@ -36,7 +36,10 @@ python/
   history_gateway.py             # xin dữ liệu giá lịch sử (OHLC) từ EA của 1 account
   history.py                       # ghi bar lịch sử vào CSV theo account, dedupe theo time
   grid_jobs.py                       # batch order kiểu grid/DCA (theo dõi tick để bắn lệnh tiếp theo)
-  auth.py                              # user đăng nhập dashboard (khác với tài khoản MT5) - SQLite riêng
+  auth.py                              # user đăng nhập dashboard (Supabase)
+  account_links.py                     # gắn user web ↔ account_id MT5 (Supabase)
+  supabase_dashboard_users.sql         # migration: bảng user đăng nhập
+  supabase_user_mt5_accounts.sql       # migration: bảng gắn user ↔ MT5 account_id
   telegram_notify.py                     # gửi thông báo Telegram, best-effort, 1 bot/chat mỗi account
   db.py                                    # SQLite: deal đã đóng + cấu hình Telegram (khóa theo account_id)
   web.py                                     # FastAPI: REST + WebSocket, mọi route scope theo {account_id},
@@ -47,10 +50,14 @@ python/
   tools/fetch_history_cron.py                         # cron gọi mỗi giờ để lấy giá lịch sử -> CSV
   main.py                                               # điểm khởi chạy, wire SessionMiddleware
   requirements.txt
-  trades.db, users.db     # SQLite, tự tạo khi chạy - không commit (đã .gitignore)
+  trades.db     # SQLite deal + Telegram config, tự tạo khi chạy - không commit (đã .gitignore)
   history/                  # CSV giá lịch sử theo account/symbol/timeframe, tự tạo - không commit
   .session_secret             # khóa ký session cookie, tự sinh - không commit
+  .env                        # SUPABASE_URL + SUPABASE_KEY - không commit
 ```
+
+Trước khi chạy lần đầu, copy `python/.env.example` → `python/.env` và chạy
+2 file SQL trên Supabase Dashboard (xem mục **Đăng nhập** và **Gắn tài khoản MT5**).
 
 ## Chạy thử
 
@@ -131,23 +138,47 @@ phải watcher chạy nền.
 
 ## Đăng nhập
 
-Tài khoản đăng nhập dashboard (`python/auth.py`, bảng `users` trong
-`users.db`) **hoàn toàn khác** với tài khoản MT5 - đây là người được phép
-mở dashboard, không phải tài khoản trading.
+Tài khoản đăng nhập dashboard (`python/auth.py`, bảng `dashboard_users` trên
+Supabase) **hoàn toàn khác** với tài khoản MT5 - đây là người được phép mở
+dashboard, không phải tài khoản trading.
 
-- `/register` hiện đang **mở** (ai có link cũng tạo được tài khoản, theo
-  yêu cầu) - nếu deploy ra ngoài `127.0.0.1`, cân nhắc chặn thêm ở tầng
-  mạng (reverse proxy, VPN...) vì bất kỳ ai đăng ký được cũng thao túng
-  được lệnh thật trên mọi tài khoản MT5 đang kết nối.
-- Mật khẩu băm bằng PBKDF2-HMAC-SHA256 (200,000 vòng, salt ngẫu nhiên mỗi
-  user) - không lưu plaintext, không cần dependency ngoài.
+- Cấu hình: `python/.env` với `SUPABASE_URL` và `SUPABASE_KEY` (copy từ
+  `.env.example`). Chạy `python/supabase_dashboard_users.sql` trong Supabase
+  SQL Editor lần đầu.
+- `/register` hiện đang **mở** (ai có link cũng tạo được tài khoản) - nếu
+  deploy ra ngoài `127.0.0.1`, cân nhắc chặn thêm ở tầng mạng (reverse proxy,
+  VPN...).
+- Mật khẩu băm PBKDF2-HMAC-SHA256 trên Python trước khi lưu Supabase.
 - Session cookie ký bằng `itsdangerous` (`SessionMiddleware`), khóa ký lưu
-  ở `python/.session_secret` (tự sinh lần đầu chạy) để restart server
-  không bắt đăng nhập lại; hết hạn sau 30 ngày.
-- Toàn bộ route `/api/{account_id}/...`, `/api/accounts` và các WebSocket
-  đều yêu cầu đăng nhập (`require_login` áp cho 1 `APIRouter` chung, xem
-  `web.py`); gọi khi chưa đăng nhập trả `401` (REST) hoặc đóng kết nối
-  ngay (WS).
+  ở `python/.session_secret`; hết hạn sau 30 ngày.
+- Mọi route `/api/...` (trừ `/api/auth/*`) và WebSocket yêu cầu đăng nhập.
+
+## Gắn tài khoản MT5 với user web
+
+Socket TCP `:9090` vẫn là đường EA kết nối (bắt buộc). Dashboard **chỉ hiện**
+các `account_id` đã gắn với user đăng nhập (bảng `dashboard_user_accounts` trên
+Supabase — chạy `python/supabase_user_mt5_accounts.sql` lần đầu).
+
+Ba cách gắn:
+
+**A — Nhập account_id trên dashboard** (trang tổng quan, ô "Số tài khoản MT5"):
+gắn trước khi EA connect; card hiện **offline** cho đến khi EA bật.
+
+**B — EA vừa connect, bấm gắn từ danh sách chờ**: panel "Tài khoản chờ gắn"
+lấy từ `GET /api/accounts/pending` (EA đã `hello` nhưng chưa ai claim).
+
+**C — Admin gán qua SQL** (không cần UI):
+
+```sql
+select public.link_user_account(
+  (select id from public.dashboard_users where username = 'ten_user'),
+  '12345678',
+  'admin'
+);
+```
+
+Mỗi `account_id` MT5 chỉ thuộc **một** user web. Gọi API/WebSocket với
+`account_id` chưa gắn → `403`. Gỡ gắn: `DELETE /api/accounts/{account_id}/link`.
 
 ## Thông báo Telegram
 
@@ -177,14 +208,12 @@ gián đoạn luồng đặt/đóng lệnh thật.
 
 ## Dashboard web
 
-Mở `http://127.0.0.1:8000` — **trang tổng quan** hiện ra trước tiên: 1 card
-mỗi tài khoản đang/đã từng kết nối (chấm xanh = online, xám = offline),
-kèm Balance/Equity/lãi-lỗ trôi nổi/số lệnh rút gọn, cập nhật realtime qua
-`WS /ws/accounts`. Bấm vào 1 card để vào **view chi tiết** của tài khoản đó
-(nút "← Tất cả tài khoản" để quay lại). Tài khoản offline vẫn hiện trong
-danh sách và xem được dữ liệu/lịch sử cuối cùng biết được, nhưng mọi nút
-đặt/đóng/sửa lệnh trong view chi tiết bị vô hiệu hóa (mờ đi, server cũng
-chặn bằng HTTP 409 nếu cố gọi thẳng API).
+Mở `http://127.0.0.1:8000` — **trang tổng quan** hiện các tài khoản MT5 **đã
+gắn** với user đăng nhập (chấm xanh = EA online, xám = offline hoặc chưa mở
+EA), cập nhật realtime qua `WS /ws/accounts`. Panel "Quản lý tài khoản MT5"
+cho phép gắn bằng số login hoặc từ danh sách EA chờ. Bấm card để vào view
+chi tiết. Tài khoản offline vẫn xem được insight/lịch sử đã lưu; nút đặt/đóng
+lệnh bị vô hiệu (server trả `409` nếu cố gọi).
 
 Trong view chi tiết:
 - Bảng vị thế đang mở, cập nhật realtime qua WebSocket (`/ws/{account_id}/positions`).
@@ -215,18 +244,12 @@ Trong view chi tiết:
   được điền dần qua message `deal_closed` từ EA - vì vậy chỉ có dữ liệu từ
   lúc EA bắt đầu kết nối trở đi.
 
-`GET /api/accounts` (danh sách tất cả tài khoản, dùng cho trang tổng quan)
-và `WS /ws/accounts` không cần account_id. Mọi route còn lại scope theo
-1 tài khoản qua prefix `/api/{account_id}/...`: `GET .../positions`,
-`GET .../account`, `GET .../insights?bucket=day&limit=30`,
-`GET .../summary`, `POST .../orders`, `POST .../positions/{ticket}/close`,
-`POST .../positions/close_all`, `POST .../positions/close_by_threshold`,
-`POST .../positions/{ticket}/modify`, `POST .../positions/refresh`,
-`POST .../magic` (`{"magic": <int>}`); WS tương tự:
-`/ws/{account_id}/positions`, `/ws/{account_id}/account`,
-`/ws/{account_id}/symbols`. Account_id không tồn tại (`session_manager`
-chưa từng thấy `hello` nào) trả về `404`; gọi lệnh khi tài khoản offline
-trả về `409`.
+`GET /api/accounts` trả account đã gắn với user hiện tại; `GET /api/accounts/pending`
+trả EA đã connect chưa claim; `POST /api/accounts/link` gắn account;
+`DELETE /api/accounts/{account_id}/link` gỡ gắn. `WS /ws/accounts` push danh
+sách đã filter theo user. Mọi route `/api/{account_id}/...` yêu cầu account
+đã gắn (`403` nếu không); live data cần EA từng connect (`404`); lệnh khi
+offline trả `409`.
 
 ## Lấy giá lịch sử (cho pipeline ML sau này)
 

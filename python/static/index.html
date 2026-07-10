@@ -95,6 +95,16 @@
   .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
   .status-dot.online { background: var(--green); box-shadow: 0 0 6px var(--green); }
   .status-dot.offline { background: var(--muted); }
+  .link-panel h2 { margin: 0 0 12px; font-size: 14px; font-weight: 600; }
+  .link-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .link-row input { flex: 1; min-width: 140px; }
+  .pending-list { display: grid; gap: 8px; margin-top: 12px; }
+  .pending-card { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+                  padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+                  background: rgba(255,255,255,.02); }
+  .pending-meta { font-size: 12px; color: var(--muted); }
+  .link-hint { font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+  .link-error { color: var(--red); font-size: 12px; margin-top: 8px; min-height: 16px; }
 </style>
 </head>
 <body>
@@ -109,10 +119,28 @@
 
 <div id="overviewView">
   <main style="max-width:900px">
+    <div class="panel link-panel">
+      <h2>Quản lý tài khoản MT5</h2>
+      <div class="link-row">
+        <input id="linkAccountId" type="text" inputmode="numeric" pattern="[0-9]{5,12}"
+               placeholder="Số tài khoản MT5 (login)" />
+        <button type="button" onclick="linkAccountManual()">Gắn tài khoản</button>
+      </div>
+      <div class="link-error" id="linkError"></div>
+      <div class="link-hint">
+        (1) Gắn EA <code>SocketBridgeEA</code> vào chart MT5, trỏ <code>127.0.0.1:9090</code>.<br>
+        (2) Gắn từ danh sách chờ bên dưới hoặc nhập số login MT5.<br>
+        (3) Admin có thể gán sẵn qua SQL (xem README).
+      </div>
+      <div id="pendingSection" style="display:none; margin-top:16px">
+        <h2 style="font-size:13px;margin:0 0 8px">Tài khoản chờ gắn (EA vừa kết nối)</h2>
+        <div id="pendingList" class="pending-list"></div>
+      </div>
+    </div>
     <div class="panel">
       <div id="accountsList" class="accounts-list"></div>
       <div id="accountsEmpty" class="empty" style="display:none">
-        Chưa có tài khoản MT5 nào kết nối. Gắn EA vào chart và đợi trong giây lát.
+        Chưa có tài khoản MT5 nào được gắn. Gắn EA vào chart, rồi nhập số login hoặc bấm gắn từ danh sách chờ.
       </div>
     </div>
   </main>
@@ -356,15 +384,25 @@ function showOverview() {
 
 function showAccount(accountId) {
   currentAccountId = accountId;
+  const a = accountsCache.find(x => x.account_id === accountId);
+  currentAccountConnected = !!(a && a.connected);
   document.getElementById('overviewView').style.display = 'none';
   document.getElementById('detailView').style.display = 'block';
   closeDetailSockets();
-  connectPositionsWs();
-  connectAccountWs();
-  connectSymbolsWs();
+  if (currentAccountConnected) {
+    connectPositionsWs();
+    connectAccountWs();
+    connectSymbolsWs();
+  } else {
+    lastPositions = [];
+    lastTotalProfit = 0;
+    renderPositions();
+    if (a) toast('EA chưa online — bật SocketBridgeEA trên MT5 để xem dữ liệu live', true);
+  }
   loadInsights();
   loadTelegramStatus();
   updateDetailHeader();
+  updateActionAvailability();
 }
 
 function updateDetailHeader() {
@@ -387,15 +425,78 @@ function renderAccountsList() {
         <span class="status-dot ${a.connected ? 'online' : 'offline'}"></span>
         <span class="account-card-title">${a.name || a.account_id}</span>
       </div>
-      <div class="account-card-broker">#${a.account_id} · ${a.broker || ''}</div>
+      <div class="account-card-broker">#${a.account_id} · ${a.broker || 'chưa kết nối EA'}</div>
       <div class="stat-grid">
-        <div class="stat-tile"><span class="stat-label">Balance</span><span class="stat-value">${fmt(a.balance)}</span></div>
-        <div class="stat-tile"><span class="stat-label">Equity</span><span class="stat-value">${fmt(a.equity)}</span></div>
+        <div class="stat-tile"><span class="stat-label">Balance</span><span class="stat-value">${a.balance != null ? fmt(a.balance) : '—'}</span></div>
+        <div class="stat-tile"><span class="stat-label">Equity</span><span class="stat-value">${a.equity != null ? fmt(a.equity) : '—'}</span></div>
         <div class="stat-tile"><span class="stat-label">Lãi/lỗ trôi nổi</span><span class="stat-value ${(a.floating_profit || 0) >= 0 ? 'profit-pos' : 'profit-neg'}">${fmt(a.floating_profit)}</span></div>
         <div class="stat-tile"><span class="stat-label">Lệnh đang mở</span><span class="stat-value">${a.open_count || 0}</span></div>
       </div>
     </div>
   `).join('');
+}
+
+async function loadPendingAccounts() {
+  try {
+    const data = await api('/api/accounts/pending');
+    const pending = data.pending || [];
+    const section = document.getElementById('pendingSection');
+    const list = document.getElementById('pendingList');
+    if (!pending.length) {
+      section.style.display = 'none';
+      list.innerHTML = '';
+      return;
+    }
+    section.style.display = 'block';
+    list.innerHTML = pending.map(a => `
+      <div class="pending-card">
+        <div>
+          <div><strong>#${a.account_id}</strong> ${a.name || ''}</div>
+          <div class="pending-meta">${a.broker || 'EA đang online'}</div>
+        </div>
+        <button type="button" onclick="linkAccountDiscovered('${a.account_id}')">Gắn với tài khoản của tôi</button>
+      </div>
+    `).join('');
+  } catch (e) {
+    /* ignore pending errors on overview */
+  }
+}
+
+async function linkAccount(accountId, linkedVia) {
+  const errorEl = document.getElementById('linkError');
+  errorEl.textContent = '';
+  try {
+    await api('/api/accounts/link', 'POST', { account_id: accountId, linked_via: linkedVia });
+    document.getElementById('linkAccountId').value = '';
+    await refreshOverviewAccounts();
+    toast('Đã gắn tài khoản #' + accountId);
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+}
+
+function linkAccountManual() {
+  const accountId = document.getElementById('linkAccountId').value.trim();
+  if (!accountId) {
+    document.getElementById('linkError').textContent = 'Nhập số tài khoản MT5';
+    return;
+  }
+  linkAccount(accountId, 'manual');
+}
+
+function linkAccountDiscovered(accountId) {
+  linkAccount(accountId, 'discovered');
+}
+
+async function refreshOverviewAccounts() {
+  try {
+    const data = await api('/api/accounts');
+    accountsCache = data.accounts || [];
+    if (currentAccountId === null) renderAccountsList();
+    await loadPendingAccounts();
+  } catch (e) {
+    /* WS will still push updates */
+  }
 }
 
 function connectAccountsWs() {
@@ -411,6 +512,7 @@ function connectAccountsWs() {
     accountsCache = JSON.parse(ev.data);
     if (currentAccountId === null) {
       renderAccountsList();
+      loadPendingAccounts();
     } else {
       const a = accountsCache.find(x => x.account_id === currentAccountId);
       if (a) {
@@ -422,6 +524,8 @@ function connectAccountsWs() {
   };
 }
 connectAccountsWs();
+loadPendingAccounts();
+setInterval(loadPendingAccounts, 10000);
 showOverview();
 
 /* ---------- Positions table: sort/filter/render ---------- */

@@ -21,6 +21,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
 from session_manager import SessionManager, AccountSession
+import account_links
 import auth
 import history
 import telegram_notify
@@ -93,6 +94,64 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class LinkAccountRequest(BaseModel):
+    account_id: str
+    linked_via: Literal["manual", "discovered"] = "manual"
+
+
+def get_current_user_id(request: Request) -> str:
+    user_id = request.session.get("user_id")
+    if not user_id:
+        raise HTTPException(401, "Chưa đăng nhập")
+    return str(user_id)
+
+
+def _offline_account_summary(account_id: str, linked_via: str) -> dict:
+    return {
+        "account_id": account_id,
+        "connected": False,
+        "broker": "",
+        "name": "",
+        "currency": "",
+        "balance": None,
+        "equity": None,
+        "floating_profit": 0,
+        "open_count": 0,
+        "linked_via": linked_via,
+    }
+
+
+def _build_accounts_for_user(user_id: str, sessions: SessionManager) -> list[dict]:
+    linked = account_links.list_linked_accounts(user_id)
+    accounts: list[dict] = []
+    for link in linked:
+        session = sessions.get(link.account_id)
+        if session is not None:
+            summary = session.summary()
+            summary["linked_via"] = link.linked_via
+            accounts.append(summary)
+        else:
+            accounts.append(_offline_account_summary(link.account_id, link.linked_via))
+    return accounts
+
+
+def _user_owns_account(user_id: str, account_id: str) -> bool:
+    linked = account_links.list_linked_accounts(user_id)
+    return any(link.account_id == account_id for link in linked)
+
+
+def _account_link_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, account_links.LinkConfigError):
+        return HTTPException(500, str(exc))
+    if isinstance(exc, account_links.LinkUnavailable):
+        return HTTPException(503, str(exc))
+    if isinstance(exc, account_links.AccountAlreadyLinked):
+        return HTTPException(409, str(exc))
+    if isinstance(exc, account_links.InvalidAccountId):
+        return HTTPException(400, str(exc))
+    return HTTPException(400, str(exc))
+
+
 def _account_response(session: AccountSession) -> dict:
     positions = session.store.snapshot()
     buy = [p for p in positions if p["side"] == "BUY"]
@@ -119,10 +178,25 @@ def create_app(sessions: SessionManager) -> FastAPI:
     # on ~13 routes individually.
     protected = APIRouter(dependencies=[Depends(require_login)])
 
-    def get_session(account_id: str) -> AccountSession:
+    def require_account_access(request: Request, account_id: str) -> None:
+        user_id = get_current_user_id(request)
+        try:
+            if not _user_owns_account(user_id, account_id):
+                raise HTTPException(
+                    403, f"Bạn chưa gắn tài khoản MT5 #{account_id}"
+                )
+        except account_links.LinkConfigError as exc:
+            raise HTTPException(500, str(exc))
+        except account_links.LinkUnavailable as exc:
+            raise HTTPException(503, str(exc))
+
+    def get_session(account_id: str, request: Request) -> AccountSession:
+        require_account_access(request, account_id)
         session = sessions.get(account_id)
         if session is None:
-            raise HTTPException(404, f"Chưa biết tài khoản {account_id} (chưa từng kết nối)")
+            raise HTTPException(
+                404, f"Tài khoản {account_id} chưa từng kết nối EA"
+            )
         return session
 
     def require_connected(session: AccountSession) -> None:
@@ -130,47 +204,102 @@ def create_app(sessions: SessionManager) -> FastAPI:
             raise HTTPException(409, f"Tài khoản {session.account_id} hiện đang offline")
 
     @protected.get("/api/accounts")
-    async def get_accounts():
-        return {"accounts": sessions.list_accounts()}
+    async def get_accounts(request: Request):
+        user_id = get_current_user_id(request)
+        try:
+            return {"accounts": _build_accounts_for_user(user_id, sessions)}
+        except account_links.LinkConfigError as exc:
+            raise HTTPException(500, str(exc))
+        except account_links.LinkUnavailable as exc:
+            raise HTTPException(503, str(exc))
+
+    @protected.get("/api/accounts/pending")
+    async def get_pending_accounts(request: Request):
+        get_current_user_id(request)
+        try:
+            claimed = account_links.list_claimed_account_ids()
+        except account_links.LinkConfigError as exc:
+            raise HTTPException(500, str(exc))
+        except account_links.LinkUnavailable as exc:
+            raise HTTPException(503, str(exc))
+        pending = [
+            session.summary()
+            for account_id, session in sessions.sessions.items()
+            if account_id not in claimed
+        ]
+        return {"pending": pending}
+
+    @protected.post("/api/accounts/link")
+    async def link_account(req: LinkAccountRequest, request: Request):
+        user_id = get_current_user_id(request)
+        try:
+            link = account_links.link_account(
+                user_id, req.account_id, req.linked_via
+            )
+        except (
+            account_links.LinkConfigError,
+            account_links.LinkUnavailable,
+            account_links.AccountAlreadyLinked,
+            account_links.InvalidAccountId,
+        ) as exc:
+            raise _account_link_http_error(exc)
+        return {
+            "account_id": link.account_id,
+            "linked_via": link.linked_via,
+        }
+
+    @protected.delete("/api/accounts/{account_id}/link")
+    async def unlink_account(account_id: str, request: Request):
+        user_id = get_current_user_id(request)
+        try:
+            removed = account_links.unlink_account(user_id, account_id)
+        except account_links.LinkConfigError as exc:
+            raise HTTPException(500, str(exc))
+        except account_links.LinkUnavailable as exc:
+            raise HTTPException(503, str(exc))
+        if not removed:
+            raise HTTPException(404, f"Chưa gắn tài khoản MT5 #{account_id}")
+        return {"ok": True}
 
     @protected.get("/api/{account_id}/positions")
-    async def get_positions(account_id: str):
-        session = get_session(account_id)
+    async def get_positions(account_id: str, request: Request):
+        session = get_session(account_id, request)
         return {"positions": session.store.snapshot(), "total_profit": session.store.total_profit()}
 
     @protected.get("/api/{account_id}/account")
-    async def get_account(account_id: str):
-        return _account_response(get_session(account_id))
+    async def get_account(account_id: str, request: Request):
+        return _account_response(get_session(account_id, request))
 
     @protected.get("/api/{account_id}/symbols")
-    async def get_symbols(account_id: str):
-        return {"symbols": get_session(account_id).symbol_store.snapshot()}
+    async def get_symbols(account_id: str, request: Request):
+        return {"symbols": get_session(account_id, request).symbol_store.snapshot()}
 
     @protected.get("/api/{account_id}/insights")
-    async def get_insights(account_id: str, bucket: Literal["minute", "hour", "day", "month", "year"] = "day",
+    async def get_insights(account_id: str, request: Request,
+                            bucket: Literal["minute", "hour", "day", "month", "year"] = "day",
                             limit: int = 30):
-        get_session(account_id)  # 404 if unknown
+        require_account_access(request, account_id)
         return {"bucket": bucket, "rows": db.insights(account_id, bucket, limit)}
 
     @protected.get("/api/{account_id}/summary")
-    async def get_summary(account_id: str):
-        get_session(account_id)
+    async def get_summary(account_id: str, request: Request):
+        require_account_access(request, account_id)
         return db.summary(account_id)
 
     @protected.get("/api/{account_id}/jobs")
-    async def get_jobs(account_id: str):
-        return {"jobs": get_session(account_id).grid_manager.active_jobs()}
+    async def get_jobs(account_id: str, request: Request):
+        return {"jobs": get_session(account_id, request).grid_manager.active_jobs()}
 
     @protected.post("/api/{account_id}/positions/refresh")
-    async def refresh_positions(account_id: str):
-        session = get_session(account_id)
+    async def refresh_positions(account_id: str, request: Request):
+        session = get_session(account_id, request)
         require_connected(session)
         await session.gateway.request_positions()
         return {"ok": True}
 
     @protected.post("/api/{account_id}/orders")
-    async def place_order(account_id: str, req: OrderRequest):
-        session = get_session(account_id)
+    async def place_order(account_id: str, req: OrderRequest, request: Request):
+        session = get_session(account_id, request)
         require_connected(session)
         cached = session.price_cache.get(req.symbol)
         if cached is None:
@@ -188,8 +317,8 @@ def create_app(sessions: SessionManager) -> FastAPI:
         return result
 
     @protected.post("/api/{account_id}/positions/{ticket}/close")
-    async def close_position(account_id: str, ticket: int):
-        session = get_session(account_id)
+    async def close_position(account_id: str, ticket: int, request: Request):
+        session = get_session(account_id, request)
         require_connected(session)
         result = await session.gateway.close_position(ticket)
         if not result.get("ok"):
@@ -197,8 +326,8 @@ def create_app(sessions: SessionManager) -> FastAPI:
         return result
 
     @protected.post("/api/{account_id}/positions/close_all")
-    async def close_all(account_id: str, req: CloseAllRequest):
-        session = get_session(account_id)
+    async def close_all(account_id: str, req: CloseAllRequest, request: Request):
+        session = get_session(account_id, request)
         require_connected(session)
         result = await session.gateway.close_all(req.filter)
         if not result.get("ok"):
@@ -206,8 +335,8 @@ def create_app(sessions: SessionManager) -> FastAPI:
         return result
 
     @protected.post("/api/{account_id}/positions/close_by_threshold")
-    async def close_by_threshold(account_id: str, req: CloseByThresholdRequest):
-        session = get_session(account_id)
+    async def close_by_threshold(account_id: str, req: CloseByThresholdRequest, request: Request):
+        session = get_session(account_id, request)
         total = session.store.total_profit()
         triggered = total >= req.amount if req.op == ">=" else total <= req.amount
         if not triggered:
@@ -219,8 +348,8 @@ def create_app(sessions: SessionManager) -> FastAPI:
         return result
 
     @protected.post("/api/{account_id}/positions/{ticket}/modify")
-    async def modify_position(account_id: str, ticket: int, req: ModifyRequest):
-        session = get_session(account_id)
+    async def modify_position(account_id: str, ticket: int, req: ModifyRequest, request: Request):
+        session = get_session(account_id, request)
         require_connected(session)
         result = await session.gateway.modify_position(ticket, req.sl, req.tp)
         if not result.get("ok"):
@@ -228,8 +357,8 @@ def create_app(sessions: SessionManager) -> FastAPI:
         return result
 
     @protected.post("/api/{account_id}/magic")
-    async def set_magic(account_id: str, req: MagicRequest):
-        session = get_session(account_id)
+    async def set_magic(account_id: str, req: MagicRequest, request: Request):
+        session = get_session(account_id, request)
         require_connected(session)
         result = await session.gateway.set_magic(req.magic)
         if not result.get("ok"):
@@ -237,22 +366,22 @@ def create_app(sessions: SessionManager) -> FastAPI:
         return result
 
     @protected.get("/api/{account_id}/telegram")
-    async def get_telegram(account_id: str):
-        get_session(account_id)  # 404 if unknown
+    async def get_telegram(account_id: str, request: Request):
+        require_account_access(request, account_id)
         config = db.get_telegram_config(account_id)
         return {"configured": config is not None, "chat_id": config["chat_id"] if config else None}
 
     @protected.post("/api/{account_id}/telegram")
-    async def set_telegram(account_id: str, req: TelegramConfigRequest):
-        get_session(account_id)
+    async def set_telegram(account_id: str, req: TelegramConfigRequest, request: Request):
+        require_account_access(request, account_id)
         if not req.bot_token.strip() or not req.chat_id.strip():
             raise HTTPException(400, "Cần nhập cả Bot Token và Chat ID")
         db.set_telegram_config(account_id, req.bot_token.strip(), req.chat_id.strip())
         return {"ok": True}
 
     @protected.post("/api/{account_id}/telegram/test")
-    async def test_telegram(account_id: str):
-        get_session(account_id)
+    async def test_telegram(account_id: str, request: Request):
+        require_account_access(request, account_id)
         config = db.get_telegram_config(account_id)
         if config is None:
             raise HTTPException(400, "Chưa cấu hình Telegram cho tài khoản này")
@@ -263,11 +392,11 @@ def create_app(sessions: SessionManager) -> FastAPI:
         return {"ok": True}
 
     @protected.post("/api/{account_id}/history/fetch")
-    async def fetch_history(account_id: str, req: HistoryFetchRequest):
+    async def fetch_history(account_id: str, req: HistoryFetchRequest, request: Request):
         """Pull `count` bars from the EA and append new ones to CSV. Meant to
         be called by an external cron job (see tools/fetch_history_cron.py) -
         this process must already be running since it owns the live EA link."""
-        session = get_session(account_id)
+        session = get_session(account_id, request)
         require_connected(session)
         try:
             bars = await session.history_gateway.fetch(req.symbol, req.timeframe, req.count)
@@ -346,25 +475,43 @@ def create_app(sessions: SessionManager) -> FastAPI:
 
     @app.websocket("/ws/accounts")
     async def ws_accounts(ws: WebSocket):
-        if not ws.session.get("user_id"):
+        user_id = ws.session.get("user_id")
+        if not user_id:
             await ws.close(code=4401)
             return
+        user_id = str(user_id)
         await ws.accept()
         queue = sessions.subscribe()
         try:
-            await ws.send_json(sessions.list_accounts())
+            try:
+                await ws.send_json(_build_accounts_for_user(user_id, sessions))
+            except (account_links.LinkConfigError, account_links.LinkUnavailable):
+                await ws.send_json([])
             while True:
-                accounts = await queue.get()
-                await ws.send_json(accounts)
+                await queue.get()
+                try:
+                    await ws.send_json(_build_accounts_for_user(user_id, sessions))
+                except (account_links.LinkConfigError, account_links.LinkUnavailable):
+                    await ws.send_json([])
         except WebSocketDisconnect:
             pass
         finally:
             sessions.unsubscribe(queue)
 
+    def _ws_account_allowed(user_id: str, account_id: str) -> bool:
+        try:
+            return _user_owns_account(user_id, account_id)
+        except (account_links.LinkConfigError, account_links.LinkUnavailable):
+            return False
+
     @app.websocket("/ws/{account_id}/positions")
     async def ws_positions(ws: WebSocket, account_id: str):
-        if not ws.session.get("user_id"):
+        user_id = ws.session.get("user_id")
+        if not user_id:
             await ws.close(code=4401)
+            return
+        if not _ws_account_allowed(str(user_id), account_id):
+            await ws.close(code=4403)
             return
         session = sessions.get(account_id)
         if session is None:
@@ -387,8 +534,12 @@ def create_app(sessions: SessionManager) -> FastAPI:
 
     @app.websocket("/ws/{account_id}/account")
     async def ws_account(ws: WebSocket, account_id: str):
-        if not ws.session.get("user_id"):
+        user_id = ws.session.get("user_id")
+        if not user_id:
             await ws.close(code=4401)
+            return
+        if not _ws_account_allowed(str(user_id), account_id):
+            await ws.close(code=4403)
             return
         session = sessions.get(account_id)
         if session is None:
@@ -408,8 +559,12 @@ def create_app(sessions: SessionManager) -> FastAPI:
 
     @app.websocket("/ws/{account_id}/symbols")
     async def ws_symbols(ws: WebSocket, account_id: str):
-        if not ws.session.get("user_id"):
+        user_id = ws.session.get("user_id")
+        if not user_id:
             await ws.close(code=4401)
+            return
+        if not _ws_account_allowed(str(user_id), account_id):
+            await ws.close(code=4403)
             return
         session = sessions.get(account_id)
         if session is None:
