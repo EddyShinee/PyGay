@@ -95,7 +95,10 @@ def _send_sync(
 def trade_keyboard_buttons(symbol: str) -> list[list[str]]:
     """Same layout as python-telegram-bot ReplyKeyboardMarkup keyboard=[[...]]."""
     sym = (symbol or "XAUUSD").strip().upper()
-    return [[f"{sym} BUY", f"{sym} - SELL", "CLOSE ALL"]]
+    return [
+        [f"{sym} BUY", f"{sym} - SELL"],
+        ["CLOSE PROFIT", "CLOSE LOSS", "CLOSE ALL"],
+    ]
 
 
 def trade_keyboard_markup(symbol: str) -> dict:
@@ -114,7 +117,10 @@ def remove_keyboard_markup() -> dict:
 
 def trade_command_hint(symbol: str) -> str:
     sym = (symbol or "XAUUSD").strip().upper()
-    return f"{sym} BUY · {sym} - SELL · CLOSE ALL"
+    return (
+        f"{sym} BUY · {sym} - SELL · "
+        "CLOSE PROFIT · CLOSE LOSS · CLOSE ALL"
+    )
 
 
 async def notify(account_id: str, text: str) -> None:

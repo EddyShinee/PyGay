@@ -24,7 +24,7 @@ _TRADE_CMD_SPACE = re.compile(r"^([A-Z0-9._]+)\s+(BUY|SELL)$")
 
 
 def parse_command(text: str) -> Optional[tuple[str, str]]:
-    """Return (action, symbol) where action is BUY | SELL | CLOSE_ALL."""
+    """Return (action, symbol) where action is BUY | SELL | CLOSE_*."""
     if not text:
         return None
     raw = text.strip().upper()
@@ -32,6 +32,10 @@ def parse_command(text: str) -> Optional[tuple[str, str]]:
         raw = raw[1:].strip()
     if raw in ("CLOSE ALL", "CLOSE_ALL"):
         return ("CLOSE_ALL", "")
+    if raw in ("CLOSE PROFIT", "CLOSE_PROFIT"):
+        return ("CLOSE_PROFIT", "")
+    if raw in ("CLOSE LOSS", "CLOSE_LOSS"):
+        return ("CLOSE_LOSS", "")
     if raw == "HOLD":
         return ("CLOSE_ALL", "")
 
@@ -70,10 +74,10 @@ async def _execute_buy_sell(session, side: str, symbol: str, volume: float) -> d
     return await session.gateway.open_order(symbol, side, volume)
 
 
-async def _execute_close_all(session) -> dict:
+async def _execute_close(session, close_filter: str) -> dict:
     if not session.connected:
         return {"ok": False, "error": "EA chưa kết nối"}
-    return await session.gateway.close_all("all")
+    return await session.gateway.close_all(close_filter)
 
 
 def _format_ok_buy_sell(account_id: str, side: str, symbol: str, volume: float) -> str:
@@ -85,9 +89,9 @@ def _format_ok_buy_sell(account_id: str, side: str, symbol: str, volume: float) 
     ])
 
 
-def _format_ok_close_all(account_id: str) -> str:
+def _format_ok_close(account_id: str, label: str) -> str:
     return "\n".join([
-        "⏸️ CLOSE ALL — đã gửi lệnh đóng tất cả",
+        f"⏸️ {label} — đã gửi lệnh đóng",
         f"#{account_id}",
     ])
 
@@ -111,11 +115,20 @@ async def _handle_command(
     if session is None:
         return _format_error(account_id, "Tài khoản chưa từng kết nối EA")
 
-    if action == "CLOSE_ALL":
-        result = await _execute_close_all(session)
+    if action in ("CLOSE_ALL", "CLOSE_PROFIT", "CLOSE_LOSS"):
+        close_filter = {"CLOSE_ALL": "all", "CLOSE_PROFIT": "profit", "CLOSE_LOSS": "loss"}[action]
+        labels = {
+            "CLOSE_ALL": "CLOSE ALL",
+            "CLOSE_PROFIT": "CLOSE PROFIT (lệnh lời)",
+            "CLOSE_LOSS": "CLOSE LOSS (lệnh lỗ)",
+        }
+        result = await _execute_close(session, close_filter)
         if result.get("ok"):
-            return _format_ok_close_all(account_id)
+            return _format_ok_close(account_id, labels[action])
         return _format_error(account_id, result.get("error", "đóng lệnh thất bại"))
+
+    if action not in ("BUY", "SELL"):
+        return _format_error(account_id, "Lệnh không hợp lệ")
 
     symbol = _resolve_symbol(session, config.get("trade_symbol"), parsed_symbol)
     if not symbol:

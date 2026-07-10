@@ -587,7 +587,7 @@
         </div>
         <div class="tab-section">
           <div class="tab-section-title">Lệnh điều khiển qua chat</div>
-          <p class="tab-hint" style="margin-top:0" id="telegramCmdHint">3 nút trên chat: XAUUSD BUY · XAUUSD - SELL · CLOSE ALL</p>
+          <p class="tab-hint" style="margin-top:0" id="telegramCmdHint">Bàn phím chat: BUY/SELL · CLOSE PROFIT · CLOSE LOSS · CLOSE ALL</p>
           <div class="tab-row" style="margin-top:10px">
             <label class="tab-field">
               <span>Symbol (nhãn nút BUY/SELL)</span>
@@ -1313,7 +1313,7 @@ async function updateTelegramCmdHint() {
   const sym = (document.getElementById('telegramTradeSymbol')?.value || 'XAUUSD').trim().toUpperCase() || 'XAUUSD';
   const el = document.getElementById('telegramCmdHint');
   if (el) {
-    el.textContent = `3 nút trên chat: ${sym} BUY · ${sym} - SELL · CLOSE ALL`;
+    el.textContent = `${sym} BUY · ${sym} - SELL · CLOSE PROFIT · CLOSE LOSS · CLOSE ALL`;
   }
 }
 
