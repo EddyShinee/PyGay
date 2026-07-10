@@ -84,6 +84,8 @@ create table if not exists public.dashboard_user_accounts (
   user_id uuid not null references public.dashboard_users(id) on delete cascade,
   account_id text not null,
   linked_via text not null check (linked_via in ('manual', 'discovered', 'admin')),
+  socket_host text not null default '127.0.0.1',
+  socket_port integer not null default 9090 check (socket_port between 1 and 65535),
   created_at timestamptz not null default now(),
   unique (account_id)
 );
@@ -109,6 +111,8 @@ begin
         json_build_object(
           'account_id', account_id,
           'linked_via', linked_via,
+          'socket_host', socket_host,
+          'socket_port', socket_port,
           'created_at', created_at
         )
         order by created_at
@@ -154,10 +158,15 @@ begin
 end;
 $$;
 
+-- Xóa overload cũ (3 tham số) để PostgREST không trả HTTP 300 Multiple Choices
+drop function if exists public.link_user_account(uuid, text, text);
+
 create or replace function public.link_user_account(
   p_user_id uuid,
   p_account_id text,
-  p_via text
+  p_via text,
+  p_socket_host text default '127.0.0.1',
+  p_socket_port integer default 9090
 )
 returns json
 language plpgsql
@@ -167,6 +176,8 @@ as $$
 declare
   new_id uuid;
   aid text := trim(p_account_id);
+  host text := coalesce(nullif(trim(p_socket_host), ''), '127.0.0.1');
+  port int := coalesce(p_socket_port, 9090);
 begin
   if aid is null or aid !~ '^[0-9]{5,12}$' then
     raise exception 'INVALID_ACCOUNT_ID';
@@ -174,20 +185,63 @@ begin
   if p_via not in ('manual', 'discovered', 'admin') then
     raise exception 'INVALID_VIA';
   end if;
+  if port < 1 or port > 65535 then
+    raise exception 'INVALID_SOCKET_PORT';
+  end if;
 
-  insert into public.dashboard_user_accounts (user_id, account_id, linked_via)
-  values (p_user_id, aid, p_via)
+  insert into public.dashboard_user_accounts (user_id, account_id, linked_via, socket_host, socket_port)
+  values (p_user_id, aid, p_via, host, port)
   returning id into new_id;
 
   return json_build_object(
     'id', new_id,
     'user_id', p_user_id,
     'account_id', aid,
-    'linked_via', p_via
+    'linked_via', p_via,
+    'socket_host', host,
+    'socket_port', port
   );
 exception
   when unique_violation then
     raise exception 'ACCOUNT_ALREADY_LINKED';
+end;
+$$;
+
+create or replace function public.update_account_socket(
+  p_user_id uuid,
+  p_account_id text,
+  p_socket_host text,
+  p_socket_port integer
+)
+returns json
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  aid text := trim(p_account_id);
+  host text := coalesce(nullif(trim(p_socket_host), ''), '127.0.0.1');
+  port int := coalesce(p_socket_port, 9090);
+  updated public.dashboard_user_accounts%rowtype;
+begin
+  if port < 1 or port > 65535 then
+    raise exception 'INVALID_SOCKET_PORT';
+  end if;
+
+  update public.dashboard_user_accounts
+  set socket_host = host, socket_port = port
+  where user_id = p_user_id and account_id = aid
+  returning * into updated;
+
+  if not found then
+    raise exception 'ACCOUNT_NOT_LINKED';
+  end if;
+
+  return json_build_object(
+    'account_id', updated.account_id,
+    'socket_host', updated.socket_host,
+    'socket_port', updated.socket_port
+  );
 end;
 $$;
 
@@ -213,13 +267,15 @@ $$;
 revoke all on function public.list_user_accounts(uuid) from public;
 revoke all on function public.list_claimed_account_ids() from public;
 revoke all on function public.get_account_owner(text) from public;
-revoke all on function public.link_user_account(uuid, text, text) from public;
+revoke all on function public.link_user_account(uuid, text, text, text, integer) from public;
+revoke all on function public.update_account_socket(uuid, text, text, integer) from public;
 revoke all on function public.unlink_user_account(uuid, text) from public;
 
 grant execute on function public.list_user_accounts(uuid) to anon, authenticated, service_role;
 grant execute on function public.list_claimed_account_ids() to anon, authenticated, service_role;
 grant execute on function public.get_account_owner(text) to anon, authenticated, service_role;
-grant execute on function public.link_user_account(uuid, text, text) to anon, authenticated, service_role;
+grant execute on function public.link_user_account(uuid, text, text, text, integer) to anon, authenticated, service_role;
+grant execute on function public.update_account_socket(uuid, text, text, integer) to anon, authenticated, service_role;
 grant execute on function public.unlink_user_account(uuid, text) to anon, authenticated, service_role;
 
 -- Admin (C): gán account MT5 cho user theo username

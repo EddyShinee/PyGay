@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import secrets
 from pathlib import Path
 
@@ -16,7 +17,8 @@ import db
 import handlers
 import web
 
-SOCKET_HOST, SOCKET_PORT = "127.0.0.1", 9090
+SOCKET_HOST = os.environ.get("SOCKET_HOST", "127.0.0.1")
+SOCKET_PORT = int(os.environ.get("SOCKET_PORT", "9090"))
 WEB_HOST, WEB_PORT = "127.0.0.1", 8000
 SESSION_SECRET_PATH = Path(__file__).parent / ".session_secret"
 SESSION_MAX_AGE_S = 60 * 60 * 24 * 30  # 30 days

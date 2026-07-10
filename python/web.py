@@ -97,6 +97,13 @@ class LoginRequest(BaseModel):
 class LinkAccountRequest(BaseModel):
     account_id: str
     linked_via: Literal["manual", "discovered"] = "manual"
+    socket_host: str = "127.0.0.1"
+    socket_port: int = 9090
+
+
+class SocketUpdateRequest(BaseModel):
+    socket_host: str = "127.0.0.1"
+    socket_port: int = 9090
 
 
 def get_current_user_id(request: Request) -> str:
@@ -106,7 +113,12 @@ def get_current_user_id(request: Request) -> str:
     return str(user_id)
 
 
-def _offline_account_summary(account_id: str, linked_via: str) -> dict:
+def _offline_account_summary(
+    account_id: str,
+    linked_via: str,
+    socket_host: str = "127.0.0.1",
+    socket_port: int = 9090,
+) -> dict:
     return {
         "account_id": account_id,
         "connected": False,
@@ -118,7 +130,16 @@ def _offline_account_summary(account_id: str, linked_via: str) -> dict:
         "floating_profit": 0,
         "open_count": 0,
         "linked_via": linked_via,
+        "socket_host": socket_host,
+        "socket_port": socket_port,
     }
+
+
+def _merge_link_meta(summary: dict, link: account_links.LinkedAccount) -> dict:
+    summary["linked_via"] = link.linked_via
+    summary["socket_host"] = link.socket_host
+    summary["socket_port"] = link.socket_port
+    return summary
 
 
 def _build_accounts_for_user(user_id: str, sessions: SessionManager) -> list[dict]:
@@ -127,11 +148,16 @@ def _build_accounts_for_user(user_id: str, sessions: SessionManager) -> list[dic
     for link in linked:
         session = sessions.get(link.account_id)
         if session is not None:
-            summary = session.summary()
-            summary["linked_via"] = link.linked_via
-            accounts.append(summary)
+            accounts.append(_merge_link_meta(session.summary(), link))
         else:
-            accounts.append(_offline_account_summary(link.account_id, link.linked_via))
+            accounts.append(
+                _offline_account_summary(
+                    link.account_id,
+                    link.linked_via,
+                    link.socket_host,
+                    link.socket_port,
+                )
+            )
     return accounts
 
 
@@ -149,6 +175,8 @@ def _account_link_http_error(exc: Exception) -> HTTPException:
         return HTTPException(409, str(exc))
     if isinstance(exc, account_links.InvalidAccountId):
         return HTTPException(400, str(exc))
+    if isinstance(exc, account_links.AccountNotLinked):
+        return HTTPException(404, str(exc))
     return HTTPException(400, str(exc))
 
 
@@ -232,9 +260,11 @@ def create_app(sessions: SessionManager) -> FastAPI:
     @protected.post("/api/accounts/link")
     async def link_account(req: LinkAccountRequest, request: Request):
         user_id = get_current_user_id(request)
+        host = (req.socket_host or "127.0.0.1").strip() or "127.0.0.1"
+        port = req.socket_port if 1 <= req.socket_port <= 65535 else 9090
         try:
             link = account_links.link_account(
-                user_id, req.account_id, req.linked_via
+                user_id, req.account_id, req.linked_via, host, port
             )
         except (
             account_links.LinkConfigError,
@@ -246,6 +276,33 @@ def create_app(sessions: SessionManager) -> FastAPI:
         return {
             "account_id": link.account_id,
             "linked_via": link.linked_via,
+            "socket_host": link.socket_host,
+            "socket_port": link.socket_port,
+        }
+
+    @protected.put("/api/accounts/{account_id}/socket")
+    async def update_account_socket(
+        account_id: str, req: SocketUpdateRequest, request: Request
+    ):
+        user_id = get_current_user_id(request)
+        require_account_access(request, account_id)
+        host = (req.socket_host or "127.0.0.1").strip() or "127.0.0.1"
+        port = req.socket_port if 1 <= req.socket_port <= 65535 else 9090
+        try:
+            link = account_links.update_account_socket(
+                user_id, account_id, host, port
+            )
+        except (
+            account_links.LinkConfigError,
+            account_links.LinkUnavailable,
+            account_links.AccountNotLinked,
+            account_links.InvalidAccountId,
+        ) as exc:
+            raise _account_link_http_error(exc)
+        return {
+            "account_id": link.account_id,
+            "socket_host": link.socket_host,
+            "socket_port": link.socket_port,
         }
 
     @protected.delete("/api/accounts/{account_id}/link")

@@ -7,6 +7,7 @@
 -- Lịch sử phiên bản:
 --   v1 — dashboard_users (đăng nhập dashboard)
 --   v2 — dashboard_user_accounts (gắn user ↔ MT5 account_id)
+--   v3 — socket_host / socket_port per linked account + update_account_socket
 --
 -- =============================================================================
 
@@ -157,3 +158,144 @@ grant execute on function public.list_claimed_account_ids() to anon, authenticat
 grant execute on function public.get_account_owner(text) to anon, authenticated, service_role;
 grant execute on function public.link_user_account(uuid, text, text) to anon, authenticated, service_role;
 grant execute on function public.unlink_user_account(uuid, text) to anon, authenticated, service_role;
+
+
+-- =============================================================================
+-- v3 — socket_host / socket_port trên mỗi tài khoản đã gắn
+-- =============================================================================
+
+alter table public.dashboard_user_accounts
+  add column if not exists socket_host text not null default '127.0.0.1',
+  add column if not exists socket_port integer not null default 9090;
+
+alter table public.dashboard_user_accounts
+  drop constraint if exists dashboard_user_accounts_socket_port_check;
+alter table public.dashboard_user_accounts
+  add constraint dashboard_user_accounts_socket_port_check
+  check (socket_port between 1 and 65535);
+
+create or replace function public.list_user_accounts(p_user_id uuid)
+returns json
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  return coalesce(
+    (
+      select json_agg(
+        json_build_object(
+          'account_id', account_id,
+          'linked_via', linked_via,
+          'socket_host', socket_host,
+          'socket_port', socket_port,
+          'created_at', created_at
+        )
+        order by created_at
+      )
+      from public.dashboard_user_accounts
+      where user_id = p_user_id
+    ),
+    '[]'::json
+  );
+end;
+$$;
+
+-- Xóa overload cũ (3 tham số) để PostgREST không trả HTTP 300 Multiple Choices
+drop function if exists public.link_user_account(uuid, text, text);
+
+create or replace function public.link_user_account(
+  p_user_id uuid,
+  p_account_id text,
+  p_via text,
+  p_socket_host text default '127.0.0.1',
+  p_socket_port integer default 9090
+)
+returns json
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  new_id uuid;
+  aid text := trim(p_account_id);
+  host text := coalesce(nullif(trim(p_socket_host), ''), '127.0.0.1');
+  port int := coalesce(p_socket_port, 9090);
+begin
+  if aid is null or aid !~ '^[0-9]{5,12}$' then
+    raise exception 'INVALID_ACCOUNT_ID';
+  end if;
+  if p_via not in ('manual', 'discovered', 'admin') then
+    raise exception 'INVALID_VIA';
+  end if;
+  if port < 1 or port > 65535 then
+    raise exception 'INVALID_SOCKET_PORT';
+  end if;
+
+  insert into public.dashboard_user_accounts (user_id, account_id, linked_via, socket_host, socket_port)
+  values (p_user_id, aid, p_via, host, port)
+  returning id into new_id;
+
+  return json_build_object(
+    'id', new_id,
+    'user_id', p_user_id,
+    'account_id', aid,
+    'linked_via', p_via,
+    'socket_host', host,
+    'socket_port', port
+  );
+exception
+  when unique_violation then
+    raise exception 'ACCOUNT_ALREADY_LINKED';
+end;
+$$;
+
+create or replace function public.update_account_socket(
+  p_user_id uuid,
+  p_account_id text,
+  p_socket_host text,
+  p_socket_port integer
+)
+returns json
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  aid text := trim(p_account_id);
+  host text := coalesce(nullif(trim(p_socket_host), ''), '127.0.0.1');
+  port int := coalesce(p_socket_port, 9090);
+  updated public.dashboard_user_accounts%rowtype;
+begin
+  if port < 1 or port > 65535 then
+    raise exception 'INVALID_SOCKET_PORT';
+  end if;
+
+  update public.dashboard_user_accounts
+  set socket_host = host, socket_port = port
+  where user_id = p_user_id and account_id = aid
+  returning * into updated;
+
+  if not found then
+    raise exception 'ACCOUNT_NOT_LINKED';
+  end if;
+
+  return json_build_object(
+    'account_id', updated.account_id,
+    'socket_host', updated.socket_host,
+    'socket_port', updated.socket_port
+  );
+end;
+$$;
+
+revoke all on function public.link_user_account(uuid, text, text, text, integer) from public;
+revoke all on function public.update_account_socket(uuid, text, text, integer) from public;
+grant execute on function public.link_user_account(uuid, text, text, text, integer) to anon, authenticated, service_role;
+grant execute on function public.update_account_socket(uuid, text, text, integer) to anon, authenticated, service_role;
+
+-- =============================================================================
+-- v4 — Sửa HTTP 300 Multiple Choices (nếu đã chạy v3 trước khi có DROP ở trên)
+-- Chạy block này nếu POST /api/accounts/link vẫn lỗi 300
+-- =============================================================================
+
+drop function if exists public.link_user_account(uuid, text, text);

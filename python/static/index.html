@@ -89,21 +89,42 @@
   .account-card { background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 10px;
                   padding: 14px; cursor: pointer; transition: border-color .15s; }
   .account-card:hover { border-color: var(--accent); }
-  .account-card-top { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+  .account-card-top { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; width: 100%; }
   .account-card-title { font-weight: 600; }
   .account-card-broker { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
   .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
   .status-dot.online { background: var(--green); box-shadow: 0 0 6px var(--green); }
   .status-dot.offline { background: var(--muted); }
   .link-panel h2 { margin: 0 0 12px; font-size: 14px; font-weight: 600; }
-  .link-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .link-row input { flex: 1; min-width: 140px; }
+  .link-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 112px;
+    gap: 10px 8px;
+    align-items: end;
+  }
+  .link-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .link-field span { font-size: 11px; color: var(--muted); }
+  .link-field input { width: 100%; box-sizing: border-box; }
+  .link-host { grid-column: 1; }
+  .link-port { grid-column: 2; }
+  .link-account { grid-column: 1; grid-row: 2; }
+  .link-actions-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .link-actions-row button { flex: 1; }
+  .account-card-socket { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+  .account-card-edit {
+    font-size: 11px; color: var(--accent); margin-left: auto; cursor: pointer;
+    border: none; background: none; padding: 0;
+  }
+  .account-card-edit:hover { text-decoration: underline; }
   .pending-list { display: grid; gap: 8px; margin-top: 12px; }
   .pending-card { display: flex; align-items: center; justify-content: space-between; gap: 12px;
                   padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
                   background: rgba(255,255,255,.02); }
   .pending-meta { font-size: 12px; color: var(--muted); }
-  .link-hint { font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
   .link-error { color: var(--red); font-size: 12px; margin-top: 8px; min-height: 16px; }
 </style>
 </head>
@@ -121,17 +142,26 @@
   <main style="max-width:900px">
     <div class="panel link-panel">
       <h2>Quản lý tài khoản MT5</h2>
-      <div class="link-row">
-        <input id="linkAccountId" type="text" inputmode="numeric" pattern="[0-9]{5,12}"
-               placeholder="Số tài khoản MT5 (login)" />
+      <div class="link-grid">
+        <label class="link-field link-host">
+          <span>IP (InpHost)</span>
+          <input id="eaSocketHost" type="text" placeholder="127.0.0.1" autocomplete="off" />
+        </label>
+        <label class="link-field link-port">
+          <span>Port (InpPort)</span>
+          <input id="eaSocketPort" type="number" min="1" max="65535" placeholder="9090" />
+        </label>
+        <label class="link-field link-account">
+          <span>Số tài khoản MT5</span>
+          <input id="linkAccountId" type="text" inputmode="numeric" pattern="[0-9]{5,12}"
+                 placeholder="Login MT5" />
+        </label>
+      </div>
+      <div class="link-actions-row">
         <button type="button" onclick="linkAccountManual()">Gắn tài khoản</button>
+        <button type="button" class="secondary" onclick="updateAccountSocket()">Cập nhật IP/Port</button>
       </div>
       <div class="link-error" id="linkError"></div>
-      <div class="link-hint">
-        (1) Gắn EA <code>SocketBridgeEA</code> vào chart MT5, trỏ <code>127.0.0.1:9090</code>.<br>
-        (2) Gắn từ danh sách chờ bên dưới hoặc nhập số login MT5.<br>
-        (3) Admin có thể gán sẵn qua SQL (xem README).
-      </div>
       <div id="pendingSection" style="display:none; margin-top:16px">
         <h2 style="font-size:13px;margin:0 0 8px">Tài khoản chờ gắn (EA vừa kết nối)</h2>
         <div id="pendingList" class="pending-list"></div>
@@ -424,8 +454,11 @@ function renderAccountsList() {
       <div class="account-card-top">
         <span class="status-dot ${a.connected ? 'online' : 'offline'}"></span>
         <span class="account-card-title">${a.name || a.account_id}</span>
+        <button type="button" class="account-card-edit"
+                onclick="event.stopPropagation(); fillLinkForm('${a.account_id}')">Sửa IP/Port</button>
       </div>
       <div class="account-card-broker">#${a.account_id} · ${a.broker || 'chưa kết nối EA'}</div>
+      <div class="account-card-socket">EA → ${a.socket_host || '127.0.0.1'}:${a.socket_port || 9090}</div>
       <div class="stat-grid">
         <div class="stat-tile"><span class="stat-label">Balance</span><span class="stat-value">${a.balance != null ? fmt(a.balance) : '—'}</span></div>
         <div class="stat-tile"><span class="stat-label">Equity</span><span class="stat-value">${a.equity != null ? fmt(a.equity) : '—'}</span></div>
@@ -462,14 +495,73 @@ async function loadPendingAccounts() {
   }
 }
 
+const EA_SOCKET_DEFAULT_HOST = '127.0.0.1';
+const EA_SOCKET_DEFAULT_PORT = 9090;
+
+function getEaSocketHost() {
+  const v = document.getElementById('eaSocketHost')?.value.trim();
+  return v || EA_SOCKET_DEFAULT_HOST;
+}
+
+function getEaSocketPort() {
+  const raw = document.getElementById('eaSocketPort')?.value.trim();
+  if (!raw) return EA_SOCKET_DEFAULT_PORT;
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return EA_SOCKET_DEFAULT_PORT;
+  return port;
+}
+
+function loadEaSocketSettings() {
+  const hostEl = document.getElementById('eaSocketHost');
+  const portEl = document.getElementById('eaSocketPort');
+  if (!hostEl || !portEl) return;
+  if (!hostEl.value) hostEl.placeholder = EA_SOCKET_DEFAULT_HOST;
+  if (!portEl.value) portEl.placeholder = String(EA_SOCKET_DEFAULT_PORT);
+}
+
+function fillLinkForm(accountId) {
+  const a = accountsCache.find(x => x.account_id === accountId);
+  document.getElementById('linkAccountId').value = accountId;
+  document.getElementById('eaSocketHost').value = a?.socket_host || EA_SOCKET_DEFAULT_HOST;
+  document.getElementById('eaSocketPort').value = a?.socket_port || EA_SOCKET_DEFAULT_PORT;
+  document.getElementById('linkError').textContent = '';
+  document.querySelector('.link-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function updateAccountSocket() {
+  const accountId = document.getElementById('linkAccountId').value.trim();
+  const errorEl = document.getElementById('linkError');
+  errorEl.textContent = '';
+  if (!accountId) {
+    errorEl.textContent = 'Nhập số tài khoản MT5 cần cập nhật';
+    return;
+  }
+  const socket_host = getEaSocketHost();
+  const socket_port = getEaSocketPort();
+  try {
+    await api(`/api/accounts/${accountId}/socket`, 'PUT', { socket_host, socket_port });
+    await refreshOverviewAccounts();
+    toast(`Đã cập nhật #${accountId} → ${socket_host}:${socket_port}`);
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+}
+
 async function linkAccount(accountId, linkedVia) {
   const errorEl = document.getElementById('linkError');
   errorEl.textContent = '';
+  const socket_host = getEaSocketHost();
+  const socket_port = getEaSocketPort();
   try {
-    await api('/api/accounts/link', 'POST', { account_id: accountId, linked_via: linkedVia });
+    await api('/api/accounts/link', 'POST', {
+      account_id: accountId,
+      linked_via: linkedVia,
+      socket_host,
+      socket_port,
+    });
     document.getElementById('linkAccountId').value = '';
     await refreshOverviewAccounts();
-    toast('Đã gắn tài khoản #' + accountId);
+    toast(`Đã gắn #${accountId} — EA trỏ ${socket_host}:${socket_port}`);
   } catch (err) {
     errorEl.textContent = err.message;
   }
@@ -524,6 +616,7 @@ function connectAccountsWs() {
   };
 }
 connectAccountsWs();
+loadEaSocketSettings();
 loadPendingAccounts();
 setInterval(loadPendingAccounts, 10000);
 showOverview();
