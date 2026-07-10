@@ -1,6 +1,6 @@
 """Link web dashboard users to MT5 account_id values via Supabase RPCs.
 
-See supabase_user_mt5_accounts.sql.
+See supabase_schema.sql / supabase_update.sql.
 """
 from __future__ import annotations
 
@@ -113,7 +113,7 @@ def list_linked_accounts(user_id: str) -> list[LinkedAccount]:
     if _schema_missing(resp):
         raise LinkConfigError(
             "Chưa tạo bảng dashboard_user_accounts. "
-            "Chạy python/supabase_user_mt5_accounts.sql trong SQL Editor"
+            "Chạy python/supabase_schema.sql trong SQL Editor"
         )
     if resp.status_code >= 400:
         raise LinkUnavailable(_parse_error(resp))
@@ -133,7 +133,7 @@ def list_claimed_account_ids() -> set[str]:
     if _schema_missing(resp):
         raise LinkConfigError(
             "Chưa tạo bảng dashboard_user_accounts. "
-            "Chạy python/supabase_user_mt5_accounts.sql trong SQL Editor"
+            "Chạy python/supabase_schema.sql trong SQL Editor"
         )
     if resp.status_code >= 400:
         raise LinkUnavailable(_parse_error(resp))
@@ -146,7 +146,7 @@ def get_owner(account_id: str) -> Optional[AccountOwner]:
     if _schema_missing(resp):
         raise LinkConfigError(
             "Chưa tạo bảng dashboard_user_accounts. "
-            "Chạy python/supabase_user_mt5_accounts.sql trong SQL Editor"
+            "Chạy python/supabase_schema.sql trong SQL Editor"
         )
     if resp.status_code >= 400:
         raise LinkUnavailable(_parse_error(resp))
@@ -169,7 +169,7 @@ def link_account(user_id: str, account_id: str, via: LinkVia) -> LinkedAccount:
     if _schema_missing(resp):
         raise LinkConfigError(
             "Chưa tạo bảng dashboard_user_accounts. "
-            "Chạy python/supabase_user_mt5_accounts.sql trong SQL Editor"
+            "Chạy python/supabase_schema.sql trong SQL Editor"
         )
     if resp.status_code >= 400:
         msg = _parse_error(resp)
@@ -196,7 +196,7 @@ def unlink_account(user_id: str, account_id: str) -> bool:
     if _schema_missing(resp):
         raise LinkConfigError(
             "Chưa tạo bảng dashboard_user_accounts. "
-            "Chạy python/supabase_user_mt5_accounts.sql trong SQL Editor"
+            "Chạy python/supabase_schema.sql trong SQL Editor"
         )
     if resp.status_code >= 400:
         raise LinkUnavailable(_parse_error(resp))

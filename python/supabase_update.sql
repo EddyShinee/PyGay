@@ -1,5 +1,19 @@
--- Run once in Supabase Dashboard → SQL Editor (after supabase_dashboard_users.sql)
--- Links web dashboard users to MT5 account_id values.
+-- =============================================================================
+-- supabase_update.sql — Nâng cấp DB đã có (chạy từng block khi cần)
+-- Project mới / trống: dùng supabase_schema.sql thay vì file này.
+-- Mỗi lần thêm schema mới: append block vào đây VÀ cập nhật supabase_schema.sql
+-- =============================================================================
+--
+-- Lịch sử phiên bản:
+--   v1 — dashboard_users (đăng nhập dashboard)
+--   v2 — dashboard_user_accounts (gắn user ↔ MT5 account_id)
+--
+-- =============================================================================
+
+
+-- =============================================================================
+-- v2 — dashboard_user_accounts (bỏ qua nếu đã chạy supabase_schema.sql đầy đủ)
+-- =============================================================================
 
 create table if not exists public.dashboard_user_accounts (
   id uuid primary key default gen_random_uuid(),
@@ -18,7 +32,6 @@ alter table public.dashboard_user_accounts enable row level security;
 revoke all on table public.dashboard_user_accounts from anon, authenticated;
 grant all on table public.dashboard_user_accounts to postgres, service_role;
 
--- List accounts linked to a dashboard user
 create or replace function public.list_user_accounts(p_user_id uuid)
 returns json
 language plpgsql
@@ -44,7 +57,6 @@ begin
 end;
 $$;
 
--- All claimed MT5 account_ids (for pending discovery)
 create or replace function public.list_claimed_account_ids()
 returns json
 language sql
@@ -55,7 +67,6 @@ as $$
   from public.dashboard_user_accounts;
 $$;
 
--- Who owns this MT5 account_id (null if unclaimed)
 create or replace function public.get_account_owner(p_account_id text)
 returns json
 language plpgsql
@@ -79,7 +90,6 @@ begin
 end;
 $$;
 
--- Link MT5 account to dashboard user (manual / discovered / admin)
 create or replace function public.link_user_account(
   p_user_id uuid,
   p_account_id text,
@@ -117,7 +127,6 @@ exception
 end;
 $$;
 
--- Unlink MT5 account from dashboard user
 create or replace function public.unlink_user_account(
   p_user_id uuid,
   p_account_id text
@@ -148,10 +157,3 @@ grant execute on function public.list_claimed_account_ids() to anon, authenticat
 grant execute on function public.get_account_owner(text) to anon, authenticated, service_role;
 grant execute on function public.link_user_account(uuid, text, text) to anon, authenticated, service_role;
 grant execute on function public.unlink_user_account(uuid, text) to anon, authenticated, service_role;
-
--- Admin example (C): assign account to user by username
--- select public.link_user_account(
---   (select id from public.dashboard_users where username = 'ten_user'),
---   '12345678',
---   'admin'
--- );

@@ -1,6 +1,6 @@
 """Web dashboard user accounts stored in Supabase Postgres.
 
-Uses table `dashboard_users` + RPCs (see supabase_dashboard_users.sql).
+Uses table `dashboard_users` + RPCs (see supabase_schema.sql).
 Passwords are PBKDF2-HMAC-SHA256 hashed in Python — no Supabase Auth email
 flow, so no email rate-limit on register.
 """
@@ -118,7 +118,7 @@ def init_db() -> None:
     if resp.status_code == 404:
         raise AuthConfigError(
             "Chưa tạo bảng dashboard_users trên Supabase. "
-            "Mở SQL Editor và chạy file python/supabase_dashboard_users.sql"
+            "Mở SQL Editor và chạy python/supabase_schema.sql (hoặc supabase_update.sql nếu đã có DB cũ)"
         )
     if resp.status_code >= 500:
         raise AuthUnavailable(_parse_error(resp))
@@ -145,7 +145,7 @@ def create_user(username: str, password: str) -> AuthUser:
         if resp.status_code == 404:
             raise AuthConfigError(
                 "Chưa tạo bảng dashboard_users trên Supabase. "
-                "Chạy file python/supabase_dashboard_users.sql trong SQL Editor"
+                "Chạy python/supabase_schema.sql trong SQL Editor"
             )
         if "USERNAME_TAKEN" in msg:
             raise UsernameTaken(f"Tên đăng nhập '{username}' đã tồn tại")
@@ -169,7 +169,7 @@ def verify_user(username: str, password: str) -> Optional[AuthUser]:
     if resp.status_code == 404:
         raise AuthConfigError(
             "Chưa tạo bảng dashboard_users trên Supabase. "
-            "Chạy file python/supabase_dashboard_users.sql trong SQL Editor"
+            "Chạy python/supabase_schema.sql trong SQL Editor"
         )
     if resp.status_code >= 400:
         raise AuthUnavailable(_parse_error(resp))

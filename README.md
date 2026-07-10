@@ -16,8 +16,14 @@ mql5/
     Socket.mqh   # wrapper Winsock (ws2_32.dll) - TCP client non-blocking
     Json.mqh     # JSON phẳng (flat) tối giản: parse + serialize
   Experts/
-    SocketBridgeEA.mq5   # EA: gửi hello + tick + snapshot vị thế + account,
+    SocketBridgeEA.mq5   # EA MT5: gửi hello + tick + snapshot vị thế + account,
                           # nhận lệnh, đặt/đóng/sửa lệnh, đồng bộ deal đã đóng
+
+mql4/
+  Include/
+    Socket.mqh, Json.mqh   # cùng protocol với MT5
+  Experts/
+    SocketBridgeEA.mq4     # bản MT4 (OrderSend/OrdersTotal), cùng JSON protocol
 
 python/
   protocol.py       # encode/decode khung JSON + \n
@@ -38,8 +44,8 @@ python/
   grid_jobs.py                       # batch order kiểu grid/DCA (theo dõi tick để bắn lệnh tiếp theo)
   auth.py                              # user đăng nhập dashboard (Supabase)
   account_links.py                     # gắn user web ↔ account_id MT5 (Supabase)
-  supabase_dashboard_users.sql         # migration: bảng user đăng nhập
-  supabase_user_mt5_accounts.sql       # migration: bảng gắn user ↔ MT5 account_id
+  supabase_schema.sql                  # SQL: tạo mới toàn bộ schema Supabase
+  supabase_update.sql                  # SQL: nâng cấp DB đã có (chạy block mới)
   telegram_notify.py                     # gửi thông báo Telegram, best-effort, 1 bot/chat mỗi account
   db.py                                    # SQLite: deal đã đóng + cấu hình Telegram (khóa theo account_id)
   web.py                                     # FastAPI: REST + WebSocket, mọi route scope theo {account_id},
@@ -57,7 +63,8 @@ python/
 ```
 
 Trước khi chạy lần đầu, copy `python/.env.example` → `python/.env` và chạy
-2 file SQL trên Supabase Dashboard (xem mục **Đăng nhập** và **Gắn tài khoản MT5**).
+`python/supabase_schema.sql` trên Supabase SQL Editor (project mới). Nếu đã có
+DB cũ, chạy thêm block mới trong `python/supabase_update.sql`.
 
 ## Chạy thử
 
@@ -79,12 +86,18 @@ Chạy thêm `python3 tools/fake_ea.py --account 1002 --ticket-start 5000` ở
 terminal khác nữa để giả lập tài khoản thứ 2 - cả 2 cùng connect vào port
 9090, dashboard sẽ hiện cả 2 trong trang tổng quan.
 
-Trong MetaEditor: copy `mql5/Include/*.mqh` vào `MQL5/Include/`,
+Trong MetaEditor **MT5**: copy `mql5/Include/*.mqh` vào `MQL5/Include/`,
 `mql5/Experts/SocketBridgeEA.mq5` vào `MQL5/Experts/`, compile, rồi gắn EA
-vào từng chart - **mỗi MT5 terminal/tài khoản gắn EA riêng, tất cả trỏ về
-cùng 1 `InpHost`/`InpPort`** (mặc định `127.0.0.1:9090`); Python tự phân
-biệt tài khoản qua message `hello` mà EA gửi lúc kết nối, không cần cấu
-hình gì thêm để chạy nhiều tài khoản.
+vào từng chart.
+
+**MT4:** copy `mql4/Include/*.mqh` vào `MQL4/Include/`,
+`mql4/Experts/SocketBridgeEA.mq4` vào `MQL4/Experts/`, compile, gắn EA.
+Cùng protocol JSON, cùng `InpHost`/`InpPort` (`127.0.0.1:9090`). Cần MT4
+build **1280+** (`EventSetMillisecondTimer`), Windows, Allow DLL imports.
+
+**Mỗi terminal/tài khoản** gắn EA riêng, tất cả trỏ về cùng 1 Python server;
+Python phân biệt qua `hello.account_id` (MT5: `AccountInfoInteger(ACCOUNT_LOGIN)`,
+MT4: `AccountNumber()`), không cần cấu hình thêm.
 
 **Bắt buộc**: trong MT5, bật *Tools > Options > Expert Advisors > Allow DLL
 imports*, và tick "Allow DLL imports" khi gắn EA vào chart. `Socket.mqh` dùng
@@ -143,8 +156,8 @@ Supabase) **hoàn toàn khác** với tài khoản MT5 - đây là người đư
 dashboard, không phải tài khoản trading.
 
 - Cấu hình: `python/.env` với `SUPABASE_URL` và `SUPABASE_KEY` (copy từ
-  `.env.example`). Chạy `python/supabase_dashboard_users.sql` trong Supabase
-  SQL Editor lần đầu.
+  `.env.example`). Chạy `python/supabase_schema.sql` trong Supabase SQL Editor
+  lần đầu (hoặc `supabase_update.sql` nếu nâng cấp DB cũ).
 - `/register` hiện đang **mở** (ai có link cũng tạo được tài khoản) - nếu
   deploy ra ngoài `127.0.0.1`, cân nhắc chặn thêm ở tầng mạng (reverse proxy,
   VPN...).
@@ -157,7 +170,7 @@ dashboard, không phải tài khoản trading.
 
 Socket TCP `:9090` vẫn là đường EA kết nối (bắt buộc). Dashboard **chỉ hiện**
 các `account_id` đã gắn với user đăng nhập (bảng `dashboard_user_accounts` trên
-Supabase — chạy `python/supabase_user_mt5_accounts.sql` lần đầu).
+Supabase — xem `python/supabase_schema.sql` hoặc block v2 trong `supabase_update.sql`).
 
 Ba cách gắn:
 
