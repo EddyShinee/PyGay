@@ -1146,7 +1146,6 @@ async function modifyPosition(ticket) {
 }
 
 async function closeAll(filter) {
-  if (!confirm(`Xác nhận đóng tất cả lệnh (${filter})?`)) return;
   try {
     await api(`/api/${currentAccountId}/positions/close_all`, 'POST', {filter});
     toast('Đã gửi lệnh đóng');
