@@ -37,7 +37,7 @@ def require_login(request: Request) -> None:
 
 
 def _read_static(name: str) -> HTMLResponse:
-    return HTMLResponse((STATIC_DIR / name).read_text())
+    return HTMLResponse((STATIC_DIR / name).read_text(encoding="utf-8"))
 
 
 class OrderRequest(BaseModel):
