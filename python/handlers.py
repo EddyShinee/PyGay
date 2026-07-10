@@ -105,14 +105,12 @@ def register(server: SocketServer, sessions: SessionManager) -> None:
                 if old_p is None:
                     await telegram_notify.notify(
                         client.account_id,
-                        f"🆕 Lệnh mới #{ticket} {new_p['side']} {new_p['symbol']} "
-                        f"{new_p['volume']} lot @ {new_p['price_open']}"
+                        telegram_notify.format_new_position(ticket, new_p),
                     )
                 elif old_p["sl"] != new_p["sl"] or old_p["tp"] != new_p["tp"]:
                     await telegram_notify.notify(
                         client.account_id,
-                        f"✏️ Sửa lệnh #{ticket} {new_p['symbol']}: "
-                        f"SL {old_p['sl']}→{new_p['sl']}, TP {old_p['tp']}→{new_p['tp']}"
+                        telegram_notify.format_modify_position(ticket, new_p["symbol"], old_p, new_p),
                     )
         session.has_synced_once = True
 
@@ -136,7 +134,7 @@ def register(server: SocketServer, sessions: SessionManager) -> None:
             if tier > session.last_drawdown_tier:
                 await telegram_notify.notify(
                     client.account_id,
-                    f"⚠️ Tài khoản {client.account_id}: Drawdown {pct:.1f}% (vượt ngưỡng {tier}%)"
+                    telegram_notify.format_drawdown_alert(client.account_id, pct, tier),
                 )
             session.last_drawdown_tier = tier
 
@@ -186,11 +184,9 @@ def register(server: SocketServer, sessions: SessionManager) -> None:
         logger.info("deal closed [%s] #%s %s %s profit=%.2f",
                     client.account_id, deal["ticket"], deal["side"], deal["symbol"], deal["profit"])
 
-        net = deal["profit"] + deal["swap"] + deal["commission"]
         await telegram_notify.notify(
             client.account_id,
-            f"🔴 Đóng lệnh #{deal['ticket']} {deal['side']} {deal['symbol']} "
-            f"{deal['volume']} lot @ {deal['price_close']} | Lãi/lỗ: {net:.2f}"
+            telegram_notify.format_close_deal(deal),
         )
 
 

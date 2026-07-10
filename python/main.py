@@ -16,6 +16,7 @@ import auth
 import db
 import handlers
 import web
+import telegram_commands
 
 SOCKET_HOST = os.environ.get("SOCKET_HOST", "127.0.0.1")
 SOCKET_PORT = int(os.environ.get("SOCKET_PORT", "9090"))
@@ -52,6 +53,7 @@ async def run() -> None:
     web_config = uvicorn.Config(app, host=WEB_HOST, port=WEB_PORT, log_level="info")
     web_server = uvicorn.Server(web_config)
 
+    asyncio.create_task(telegram_commands.run_poller(sessions))
     await asyncio.gather(server.start(), web_server.serve())
 
 

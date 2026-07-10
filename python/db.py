@@ -55,6 +55,8 @@ _CREATE_ACCOUNT_SETTINGS_SQL = """
 def init_db(db_path: Path = DB_PATH) -> None:
     conn = get_connection(db_path)
     conn.execute(_CREATE_ACCOUNT_SETTINGS_SQL)
+    _ensure_column(conn, "account_settings", "telegram_trade_symbol", "TEXT")
+    _ensure_column(conn, "account_settings", "telegram_trade_lot", "REAL")
 
     existing = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='deals'"
@@ -85,6 +87,12 @@ def init_db(db_path: Path = DB_PATH) -> None:
             conn.execute("DROP TABLE deals_old")
     conn.commit()
     conn.close()
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, coldef: str) -> None:
+    cols = [row[1] for row in conn.execute(f"PRAGMA table_info({table})")]
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coldef}")
 
 
 def upsert_deal(account_id: str, deal: dict, db_path: Path = DB_PATH) -> None:
@@ -154,26 +162,73 @@ def summary(account_id: str, db_path: Path = DB_PATH) -> dict:
 
 
 def get_telegram_config(account_id: str, db_path: Path = DB_PATH) -> Optional[dict]:
-    """Returns {"bot_token", "chat_id"} or None if not configured for this account."""
+    """Returns bot/chat and optional trade defaults for Telegram commands."""
     conn = get_connection(db_path)
     row = conn.execute(
-        "SELECT telegram_bot_token, telegram_chat_id FROM account_settings WHERE account_id = ?",
+        """SELECT telegram_bot_token, telegram_chat_id,
+                  telegram_trade_symbol, telegram_trade_lot
+           FROM account_settings WHERE account_id = ?""",
         (account_id,),
     ).fetchone()
     conn.close()
     if row is None or not row["telegram_bot_token"] or not row["telegram_chat_id"]:
         return None
-    return {"bot_token": row["telegram_bot_token"], "chat_id": row["telegram_chat_id"]}
+    lot = row["telegram_trade_lot"]
+    return {
+        "bot_token": row["telegram_bot_token"],
+        "chat_id": str(row["telegram_chat_id"]),
+        "trade_symbol": (row["telegram_trade_symbol"] or "").strip().upper() or None,
+        "trade_lot": float(lot) if lot is not None else 0.01,
+    }
 
 
-def set_telegram_config(account_id: str, bot_token: str, chat_id: str, db_path: Path = DB_PATH) -> None:
+def list_telegram_configs(db_path: Path = DB_PATH) -> list[dict]:
     conn = get_connection(db_path)
-    conn.execute("""
-        INSERT INTO account_settings (account_id, telegram_bot_token, telegram_chat_id)
-        VALUES (?, ?, ?)
+    rows = conn.execute(
+        """SELECT account_id, telegram_bot_token, telegram_chat_id,
+                  telegram_trade_symbol, telegram_trade_lot
+           FROM account_settings
+           WHERE telegram_bot_token IS NOT NULL AND telegram_bot_token != ''
+             AND telegram_chat_id IS NOT NULL AND telegram_chat_id != ''"""
+    ).fetchall()
+    conn.close()
+    out: list[dict] = []
+    for row in rows:
+        lot = row["telegram_trade_lot"]
+        out.append({
+            "account_id": row["account_id"],
+            "bot_token": row["telegram_bot_token"],
+            "chat_id": str(row["telegram_chat_id"]),
+            "trade_symbol": (row["telegram_trade_symbol"] or "").strip().upper() or None,
+            "trade_lot": float(lot) if lot is not None else 0.01,
+        })
+    return out
+
+
+def set_telegram_config(
+    account_id: str,
+    bot_token: str,
+    chat_id: str,
+    trade_symbol: Optional[str] = None,
+    trade_lot: Optional[float] = None,
+    db_path: Path = DB_PATH,
+) -> None:
+    symbol = (trade_symbol or "").strip().upper() or None
+    conn = get_connection(db_path)
+    conn.execute(
+        """
+        INSERT INTO account_settings (
+            account_id, telegram_bot_token, telegram_chat_id,
+            telegram_trade_symbol, telegram_trade_lot
+        )
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(account_id) DO UPDATE SET
             telegram_bot_token = excluded.telegram_bot_token,
-            telegram_chat_id = excluded.telegram_chat_id
-    """, (account_id, bot_token, chat_id))
+            telegram_chat_id = excluded.telegram_chat_id,
+            telegram_trade_symbol = excluded.telegram_trade_symbol,
+            telegram_trade_lot = excluded.telegram_trade_lot
+        """,
+        (account_id, bot_token, chat_id, symbol, trade_lot if trade_lot is not None else 0.01),
+    )
     conn.commit()
     conn.close()

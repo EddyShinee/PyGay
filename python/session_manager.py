@@ -88,7 +88,10 @@ class SessionManager:
         await self._notify()
 
         broker = info.get("broker", "")
-        await telegram_notify.notify(account_id, f"🟢 Tài khoản {account_id} ({broker}) đã kết nối")
+        await telegram_notify.notify(
+            account_id,
+            telegram_notify.format_account_connected(account_id, broker),
+        )
 
     def on_client_disconnect(self, client: Client) -> None:
         session = self.sessions.get(client.account_id) if client.account_id else None

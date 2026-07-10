@@ -584,6 +584,20 @@
           </div>
           <div class="tab-hint" id="telegramStatus"></div>
         </div>
+        <div class="tab-section">
+          <div class="tab-section-title">Lệnh điều khiển qua chat</div>
+          <p class="tab-hint" style="margin-top:0">Gửi tin nhắn cho bot: <b>BUY</b> · <b>SELL</b> · <b>HOLD</b> (đóng hết lệnh)</p>
+          <div class="tab-row" style="margin-top:10px">
+            <label class="tab-field">
+              <span>Symbol mặc định (BUY/SELL)</span>
+              <input id="telegramTradeSymbol" type="text" placeholder="XAUUSD" style="width:120px" />
+            </label>
+            <label class="tab-field">
+              <span>Lot mặc định</span>
+              <input id="telegramTradeLot" type="number" step="0.01" min="0.01" value="0.01" style="width:80px" />
+            </label>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1301,15 +1315,28 @@ async function loadTelegramStatus() {
     if (accountId !== currentAccountId) return;
     document.getElementById('telegramStatus').textContent =
       data.configured ? `Đã cấu hình (chat ${data.chat_id})` : 'Chưa cấu hình';
+    if (data.trade_symbol) {
+      document.getElementById('telegramTradeSymbol').value = data.trade_symbol;
+    }
+    if (data.trade_lot) {
+      document.getElementById('telegramTradeLot').value = data.trade_lot;
+    }
   } catch (e) { /* best-effort */ }
 }
 
 async function saveTelegram() {
   const bot_token = document.getElementById('telegramToken').value.trim();
   const chat_id = document.getElementById('telegramChatId').value.trim();
+  const trade_symbol = document.getElementById('telegramTradeSymbol').value.trim().toUpperCase();
+  const trade_lot = parseFloat(document.getElementById('telegramTradeLot').value);
   if (!bot_token || !chat_id) { toast('Nhập cả Bot Token và Chat ID', true); return; }
   try {
-    await api(`/api/${currentAccountId}/telegram`, 'POST', {bot_token, chat_id});
+    await api(`/api/${currentAccountId}/telegram`, 'POST', {
+      bot_token,
+      chat_id,
+      trade_symbol,
+      trade_lot: Number.isFinite(trade_lot) && trade_lot > 0 ? trade_lot : 0.01,
+    });
     toast('Đã lưu cấu hình Telegram');
     document.getElementById('telegramToken').value = '';
     loadTelegramStatus();

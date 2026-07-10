@@ -82,6 +82,8 @@ class HistoryFetchRequest(BaseModel):
 class TelegramConfigRequest(BaseModel):
     bot_token: str
     chat_id: str
+    trade_symbol: str = ""
+    trade_lot: float = 0.01
 
 
 class RegisterRequest(BaseModel):
@@ -428,14 +430,32 @@ def create_app(sessions: SessionManager) -> FastAPI:
     async def get_telegram(account_id: str, request: Request):
         require_account_access(request, account_id)
         config = db.get_telegram_config(account_id)
-        return {"configured": config is not None, "chat_id": config["chat_id"] if config else None}
+        if config is None:
+            return {"configured": False, "chat_id": None, "trade_symbol": "", "trade_lot": 0.01}
+        return {
+            "configured": True,
+            "chat_id": config["chat_id"],
+            "trade_symbol": config.get("trade_symbol") or "",
+            "trade_lot": config.get("trade_lot") or 0.01,
+        }
 
     @protected.post("/api/{account_id}/telegram")
     async def set_telegram(account_id: str, req: TelegramConfigRequest, request: Request):
         require_account_access(request, account_id)
         if not req.bot_token.strip() or not req.chat_id.strip():
             raise HTTPException(400, "Cần nhập cả Bot Token và Chat ID")
-        db.set_telegram_config(account_id, req.bot_token.strip(), req.chat_id.strip())
+        existing = db.get_telegram_config(account_id)
+        symbol = req.trade_symbol.strip().upper() if req.trade_symbol.strip() else (
+            (existing or {}).get("trade_symbol") or ""
+        )
+        lot = req.trade_lot if req.trade_lot > 0 else (existing or {}).get("trade_lot") or 0.01
+        db.set_telegram_config(
+            account_id,
+            req.bot_token.strip(),
+            req.chat_id.strip(),
+            trade_symbol=symbol or None,
+            trade_lot=lot,
+        )
         return {"ok": True}
 
     @protected.post("/api/{account_id}/telegram/test")
