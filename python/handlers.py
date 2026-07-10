@@ -13,10 +13,23 @@ from socket_server import Client, SocketServer
 from session_manager import SessionManager
 from models import Position
 import db
+import telegram_notify
 
 logger = logging.getLogger("handlers")
 
 ACCOUNT_FIELDS = ("balance", "equity", "margin", "margin_free", "margin_level", "currency", "leverage", "magic")
+
+# Drawdown = floating loss / balance, as a percentage. Checked highest-first
+# so a jump straight from 40% to 85% (say) is reported at its true 70% tier,
+# not silently skipped.
+DRAWDOWN_TIERS = (100, 70, 60, 50)
+
+
+def _drawdown_tier(pct: float) -> int:
+    for tier in DRAWDOWN_TIERS:
+        if pct >= tier:
+            return tier
+    return 0
 
 
 def register(server: SocketServer, sessions: SessionManager) -> None:
@@ -74,8 +87,33 @@ def register(server: SocketServer, sessions: SessionManager) -> None:
     @server.on("positions_end")
     async def on_positions_end(client: Client, message: dict) -> None:
         session = sessions.get(client.account_id)
-        if session is not None:
-            await session.store.end_snapshot()
+        if session is None:
+            return
+
+        # Diff against the previous snapshot to detect new/modified orders -
+        # this catches ANY change to the account (manual trades in MT5,
+        # other EAs, this dashboard, ...), not just dashboard-initiated
+        # ones. Skipped on the very first snapshot after connecting, or
+        # every pre-existing open position would be reported as "new".
+        old_by_ticket = {p["ticket"]: p for p in session.store.snapshot()} if session.has_synced_once else None
+        await session.store.end_snapshot()
+
+        if old_by_ticket is not None:
+            for ticket, new_p in {p["ticket"]: p for p in session.store.snapshot()}.items():
+                old_p = old_by_ticket.get(ticket)
+                if old_p is None:
+                    await telegram_notify.notify(
+                        client.account_id,
+                        f"🆕 Lệnh mới #{ticket} {new_p['side']} {new_p['symbol']} "
+                        f"{new_p['volume']} lot @ {new_p['price_open']}"
+                    )
+                elif old_p["sl"] != new_p["sl"] or old_p["tp"] != new_p["tp"]:
+                    await telegram_notify.notify(
+                        client.account_id,
+                        f"✏️ Sửa lệnh #{ticket} {new_p['symbol']}: "
+                        f"SL {old_p['sl']}→{new_p['sl']}, TP {old_p['tp']}→{new_p['tp']}"
+                    )
+        session.has_synced_once = True
 
     @server.on("order_result")
     async def on_order_result(client: Client, message: dict) -> None:
@@ -86,8 +124,20 @@ def register(server: SocketServer, sessions: SessionManager) -> None:
     @server.on("account")
     async def on_account(client: Client, message: dict) -> None:
         session = sessions.get(client.account_id)
-        if session is not None:
-            await session.account_store.update({k: message[k] for k in ACCOUNT_FIELDS if k in message})
+        if session is None:
+            return
+        await session.account_store.update({k: message[k] for k in ACCOUNT_FIELDS if k in message})
+
+        balance = float(message.get("balance") or 0)
+        if balance > 0:
+            pct = max(0.0, -session.store.total_profit() / balance * 100)
+            tier = _drawdown_tier(pct)
+            if tier > session.last_drawdown_tier:
+                await telegram_notify.notify(
+                    client.account_id,
+                    f"⚠️ Tài khoản {client.account_id}: Drawdown {pct:.1f}% (vượt ngưỡng {tier}%)"
+                )
+            session.last_drawdown_tier = tier
 
     @server.on("symbols")
     async def on_symbols(client: Client, message: dict) -> None:
@@ -134,6 +184,13 @@ def register(server: SocketServer, sessions: SessionManager) -> None:
         db.upsert_deal(client.account_id, deal)
         logger.info("deal closed [%s] #%s %s %s profit=%.2f",
                     client.account_id, deal["ticket"], deal["side"], deal["symbol"], deal["profit"])
+
+        net = deal["profit"] + deal["swap"] + deal["commission"]
+        await telegram_notify.notify(
+            client.account_id,
+            f"🔴 Đóng lệnh #{deal['ticket']} {deal['side']} {deal['symbol']} "
+            f"{deal['volume']} lot @ {deal['price_close']} | Lãi/lỗ: {net:.2f}"
+        )
 
 
 def compute_signal(tick: dict) -> Optional[dict]:

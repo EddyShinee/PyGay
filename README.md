@@ -6,7 +6,9 @@ message (newline-delimited JSON). **Python là server, mỗi MT5 terminal là
 nhiều tài khoản** (FastAPI): trang tổng quan liệt kê mọi tài khoản đang/đã
 từng kết nối, bấm vào 1 tài khoản để xem chi tiết - danh sách giao dịch,
 thông tin tài khoản + insight BUY/SELL theo thời gian, đặt lệnh (kể cả
-batch/grid DCA), đóng lệnh và sửa SL/TP.
+batch/grid DCA), đóng lệnh và sửa SL/TP. Dashboard yêu cầu **đăng nhập**,
+và mỗi tài khoản MT5 có thể gắn 1 **bot Telegram riêng** để báo mọi thao
+tác (kết nối, lệnh mới/sửa/đóng, cảnh báo drawdown).
 
 ```
 mql5/
@@ -24,7 +26,7 @@ python/
   session_manager.py # SessionManager: 1 AccountSession (gói mọi store/gateway
                       # bên dưới) cho mỗi account_id, tra cứu theo client.account_id
   handlers.py         # business logic: xử lý message theo "type", route vào
-                       # đúng AccountSession qua client.account_id
+                       # đúng AccountSession qua client.account_id, gọi telegram_notify
   models.py             # dataclass Position
   position_store.py     # snapshot vị thế hiện tại + pub/sub cho WebSocket
   account_store.py        # snapshot tài khoản (balance/equity/margin/...) + pub/sub
@@ -34,15 +36,20 @@ python/
   history_gateway.py             # xin dữ liệu giá lịch sử (OHLC) từ EA của 1 account
   history.py                       # ghi bar lịch sử vào CSV theo account, dedupe theo time
   grid_jobs.py                       # batch order kiểu grid/DCA (theo dõi tick để bắn lệnh tiếp theo)
-  db.py                                # SQLite: lưu deal đã đóng (khóa theo account_id+ticket)
-  web.py                                 # FastAPI: REST + WebSocket, mọi route scope theo {account_id}
-  static/index.html                        # dashboard: view tổng quan + view chi tiết theo account
-  tools/fake_ea.py                           # giả lập EA (--account <id>) để test không cần MT5 thật
-  tools/fetch_history_cron.py                  # cron gọi mỗi giờ để lấy giá lịch sử -> CSV
-  main.py                                        # điểm khởi chạy (chạy chung socket server + web server)
+  auth.py                              # user đăng nhập dashboard (khác với tài khoản MT5) - SQLite riêng
+  telegram_notify.py                     # gửi thông báo Telegram, best-effort, 1 bot/chat mỗi account
+  db.py                                    # SQLite: deal đã đóng + cấu hình Telegram (khóa theo account_id)
+  web.py                                     # FastAPI: REST + WebSocket, mọi route scope theo {account_id},
+                                              # bọc sau đăng nhập (trừ /api/auth/*)
+  static/index.html                            # dashboard: view tổng quan + view chi tiết theo account
+  static/login.html, static/register.html        # trang đăng nhập/đăng ký
+  tools/fake_ea.py                                  # giả lập EA (--account <id>) để test không cần MT5 thật
+  tools/fetch_history_cron.py                         # cron gọi mỗi giờ để lấy giá lịch sử -> CSV
+  main.py                                               # điểm khởi chạy, wire SessionMiddleware
   requirements.txt
-  trades.db      # SQLite, tự tạo khi chạy - không commit (đã .gitignore)
-  history/         # CSV giá lịch sử theo account/symbol/timeframe, tự tạo - không commit
+  trades.db, users.db     # SQLite, tự tạo khi chạy - không commit (đã .gitignore)
+  history/                  # CSV giá lịch sử theo account/symbol/timeframe, tự tạo - không commit
+  .session_secret             # khóa ký session cookie, tự sinh - không commit
 ```
 
 ## Chạy thử
@@ -55,8 +62,9 @@ python3 main.py
 ```
 
 - Socket server (cho EA) lắng nghe `127.0.0.1:9090`.
-- Web dashboard chạy ở `http://127.0.0.1:8000` (chỉ nên chạy trên
-  localhost - **chưa có xác thực/đăng nhập**).
+- Web dashboard chạy ở `http://127.0.0.1:8000`, mở lên sẽ ra `/login` -
+  bấm "Đăng ký" để tạo tài khoản đầu tiên (xem mục **Đăng nhập** bên dưới
+  về việc đăng ký hiện đang **mở**, ai có link cũng tạo được).
 
 Chưa có MT5 thật? Mở terminal khác, chạy `python3 tools/fake_ea.py --account 1001`
 để giả lập EA (random-walk giá + vị thế giả) và thao tác thử trên dashboard.
@@ -120,6 +128,52 @@ Ví dụ tick: `{"type":"tick","symbol":"EURUSD","bid":1.0855,"ask":1.0857,"poin
 riêng — Python tự tính tổng từ `position_store` rồi gửi `close_all` bình
 thường nếu đạt ngưỡng. Đây là hành động kiểm tra 1 lần khi bấm nút, không
 phải watcher chạy nền.
+
+## Đăng nhập
+
+Tài khoản đăng nhập dashboard (`python/auth.py`, bảng `users` trong
+`users.db`) **hoàn toàn khác** với tài khoản MT5 - đây là người được phép
+mở dashboard, không phải tài khoản trading.
+
+- `/register` hiện đang **mở** (ai có link cũng tạo được tài khoản, theo
+  yêu cầu) - nếu deploy ra ngoài `127.0.0.1`, cân nhắc chặn thêm ở tầng
+  mạng (reverse proxy, VPN...) vì bất kỳ ai đăng ký được cũng thao túng
+  được lệnh thật trên mọi tài khoản MT5 đang kết nối.
+- Mật khẩu băm bằng PBKDF2-HMAC-SHA256 (200,000 vòng, salt ngẫu nhiên mỗi
+  user) - không lưu plaintext, không cần dependency ngoài.
+- Session cookie ký bằng `itsdangerous` (`SessionMiddleware`), khóa ký lưu
+  ở `python/.session_secret` (tự sinh lần đầu chạy) để restart server
+  không bắt đăng nhập lại; hết hạn sau 30 ngày.
+- Toàn bộ route `/api/{account_id}/...`, `/api/accounts` và các WebSocket
+  đều yêu cầu đăng nhập (`require_login` áp cho 1 `APIRouter` chung, xem
+  `web.py`); gọi khi chưa đăng nhập trả `401` (REST) hoặc đóng kết nối
+  ngay (WS).
+
+## Thông báo Telegram
+
+Mỗi tài khoản MT5 cấu hình 1 bot Telegram riêng (Bot Token + Chat ID,
+panel trong view chi tiết của dashboard - nút "Lưu" và "Test"). Tạo bot
+qua [@BotFather](https://t.me/BotFather) (`/newbot`), lấy Chat ID bằng
+cách nhắn 1 tin bất kỳ cho bot rồi mở
+`https://api.telegram.org/bot<TOKEN>/getUpdates` - `chat.id` trong kết
+quả JSON chính là Chat ID.
+
+Tự động báo (`telegram_notify.py`, gọi từ `session_manager.py`/`handlers.py`):
+- 🟢 Tài khoản MT5 kết nối (mỗi lần EA connect - kể cả reconnect).
+- 🆕 Lệnh mới / ✏️ sửa lệnh (SL/TP đổi) - phát hiện bằng cách so sánh
+  snapshot vị thế mới với snapshot trước đó (`handlers.py:on_positions_end`),
+  nên bắt được **mọi** thay đổi trên tài khoản, kể cả đặt/sửa lệnh tay
+  ngay trong MT5, không chỉ thao tác từ dashboard.
+- 🔴 Đóng lệnh - từ chính message `deal_closed` đã có sẵn đầy đủ
+  profit/giá đóng.
+- ⚠️ Drawdown vượt 50% / 60% / 70% / 100% (= lỗ nổi / balance) - báo 1
+  lần khi **vượt** ngưỡng (không lặp lại khi vẫn ở cùng mức), tự "reset"
+  khi hồi phục để lần vượt ngưỡng kế tiếp vẫn được báo.
+
+Chưa cấu hình Telegram cho 1 tài khoản thì mọi `notify()` cho tài khoản
+đó tự động im lặng bỏ qua (không lỗi, không cần bật/tắt riêng). Lỗi gửi
+Telegram (token/chat sai, mất mạng...) chỉ ghi log, **không bao giờ** làm
+gián đoạn luồng đặt/đóng lệnh thật.
 
 ## Dashboard web
 
@@ -262,8 +316,13 @@ trong `static/index.html` (nhớ chèn `currentAccountId` vào URL).
   giờ kết nối lại - nếu chạy lâu dài với nhiều tài khoản test/tạm thời,
   danh sách tổng quan sẽ tích tụ dần (không ảnh hưởng chức năng, chỉ là
   danh sách dài hơn).
-- Dashboard web **chưa có xác thực/đăng nhập** — chỉ nên chạy trên
-  `127.0.0.1`, không expose ra ngoài mạng.
+- Đăng ký dashboard **mở cho tất cả** (xem mục Đăng nhập) - ai đăng ký
+  được cũng có toàn quyền trên mọi tài khoản MT5, không phân quyền theo
+  user. Chưa có CSRF token riêng - dựa vào cookie `SameSite=lax` mặc định
+  của `SessionMiddleware` để chặn phần lớn request giả mạo cross-site.
+- Bot Telegram chỉ **báo (notify)**, không nhận lệnh 2 chiều (không gõ
+  lệnh từ Telegram để đặt/đóng lệnh) - chỉ dashboard web mới điều khiển
+  được.
 - Magic Number chỉ là **giá trị gắn vào lệnh mới mở** qua bridge - EA vẫn
   hiển thị/quản lý **tất cả** vị thế trên tài khoản (kể cả lệnh tay hoặc
   của EA khác), không tự lọc theo magic. Nếu cần chỉ quản lý lệnh của

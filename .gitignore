@@ -3,3 +3,5 @@ __pycache__/
 .venv/
 python/trades.db
 python/history/
+python/users.db
+python/.session_secret

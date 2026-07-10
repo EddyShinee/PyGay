@@ -43,8 +43,19 @@ _CREATE_DEALS_SQL = """
 """
 
 
+_CREATE_ACCOUNT_SETTINGS_SQL = """
+    CREATE TABLE IF NOT EXISTS account_settings (
+        account_id TEXT PRIMARY KEY,
+        telegram_bot_token TEXT,
+        telegram_chat_id TEXT
+    )
+"""
+
+
 def init_db(db_path: Path = DB_PATH) -> None:
     conn = get_connection(db_path)
+    conn.execute(_CREATE_ACCOUNT_SETTINGS_SQL)
+
     existing = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='deals'"
     ).fetchone()
@@ -140,3 +151,29 @@ def summary(account_id: str, db_path: Path = DB_PATH) -> dict:
     d["win_rate"] = round(d["wins"] / trades * 100, 1) if trades else 0.0
     d["profit_factor"] = round(d["gross_profit"] / d["gross_loss"], 2) if d["gross_loss"] else None
     return d
+
+
+def get_telegram_config(account_id: str, db_path: Path = DB_PATH) -> Optional[dict]:
+    """Returns {"bot_token", "chat_id"} or None if not configured for this account."""
+    conn = get_connection(db_path)
+    row = conn.execute(
+        "SELECT telegram_bot_token, telegram_chat_id FROM account_settings WHERE account_id = ?",
+        (account_id,),
+    ).fetchone()
+    conn.close()
+    if row is None or not row["telegram_bot_token"] or not row["telegram_chat_id"]:
+        return None
+    return {"bot_token": row["telegram_bot_token"], "chat_id": row["telegram_chat_id"]}
+
+
+def set_telegram_config(account_id: str, bot_token: str, chat_id: str, db_path: Path = DB_PATH) -> None:
+    conn = get_connection(db_path)
+    conn.execute("""
+        INSERT INTO account_settings (account_id, telegram_bot_token, telegram_chat_id)
+        VALUES (?, ?, ?)
+        ON CONFLICT(account_id) DO UPDATE SET
+            telegram_bot_token = excluded.telegram_bot_token,
+            telegram_chat_id = excluded.telegram_chat_id
+    """, (account_id, bot_token, chat_id))
+    conn.commit()
+    conn.close()

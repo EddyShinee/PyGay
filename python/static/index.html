@@ -101,7 +101,10 @@
 
 <header>
   <h1>MT5 Dashboard</h1>
-  <span id="status" class="down">Đang kết nối...</span>
+  <div style="display:flex;align-items:center;gap:12px">
+    <span id="status" class="down">Đang kết nối...</span>
+    <button class="ghost" onclick="logout()">Đăng xuất</button>
+  </div>
 </header>
 
 <div id="overviewView">
@@ -148,6 +151,15 @@
         <input id="magicInput" type="number" step="1" style="width:110px" />
         <button class="secondary needs-connection" onclick="saveMagic()">Lưu</button>
         <span id="magicCurrent" style="font-size:12px;color:var(--muted)"></span>
+      </div>
+      <div class="toolbar" style="margin-bottom:10px">
+        <label style="font-size:12px;color:var(--muted)">Telegram: Bot Token</label>
+        <input id="telegramToken" type="password" style="width:180px" placeholder="123456:ABC-DEF..." />
+        <label style="font-size:12px;color:var(--muted)">Chat ID</label>
+        <input id="telegramChatId" type="text" style="width:120px" placeholder="123456789" />
+        <button class="secondary" onclick="saveTelegram()">Lưu</button>
+        <button class="secondary" onclick="testTelegram()">Test</button>
+        <span id="telegramStatus" style="font-size:12px;color:var(--muted)"></span>
       </div>
       <div class="toolbar">
         <button class="needs-connection" onclick="openOrderModal()">+ Thêm lệnh</button>
@@ -294,11 +306,20 @@ async function api(path, method, body) {
     headers: body ? {'Content-Type': 'application/json'} : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
+  if (res.status === 401) {
+    location.href = '/login';
+    throw new Error('Chưa đăng nhập');
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(data.detail || 'Có lỗi xảy ra');
   }
   return data;
+}
+
+async function logout() {
+  try { await api('/api/auth/logout', 'POST'); } catch (e) { /* ignore */ }
+  location.href = '/login';
 }
 
 function fmt(n, digits) {
@@ -342,6 +363,7 @@ function showAccount(accountId) {
   connectAccountWs();
   connectSymbolsWs();
   loadInsights();
+  loadTelegramStatus();
   updateDetailHeader();
 }
 
@@ -598,6 +620,35 @@ async function saveMagic() {
     await api(`/api/${currentAccountId}/magic`, 'POST', {magic});
     toast(`Đã đặt Magic Number = ${magic}`);
     document.getElementById('magicInput').value = '';
+  } catch (e) { toast(e.message, true); }
+}
+
+async function loadTelegramStatus() {
+  const accountId = currentAccountId;
+  try {
+    const data = await api(`/api/${accountId}/telegram`, 'GET');
+    if (accountId !== currentAccountId) return;
+    document.getElementById('telegramStatus').textContent =
+      data.configured ? `Đã cấu hình (chat ${data.chat_id})` : 'Chưa cấu hình';
+  } catch (e) { /* best-effort */ }
+}
+
+async function saveTelegram() {
+  const bot_token = document.getElementById('telegramToken').value.trim();
+  const chat_id = document.getElementById('telegramChatId').value.trim();
+  if (!bot_token || !chat_id) { toast('Nhập cả Bot Token và Chat ID', true); return; }
+  try {
+    await api(`/api/${currentAccountId}/telegram`, 'POST', {bot_token, chat_id});
+    toast('Đã lưu cấu hình Telegram');
+    document.getElementById('telegramToken').value = '';
+    loadTelegramStatus();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function testTelegram() {
+  try {
+    await api(`/api/${currentAccountId}/telegram/test`, 'POST');
+    toast('Đã gửi tin nhắn test - kiểm tra Telegram');
   } catch (e) { toast(e.message, true); }
 }
 

@@ -16,6 +16,7 @@ from price_cache import PriceCache
 from trade_gateway import TradeGateway
 from grid_jobs import GridJobManager
 from history_gateway import HistoryGateway
+import telegram_notify
 
 logger = logging.getLogger("session_manager")
 
@@ -33,6 +34,10 @@ class AccountSession:
         self.gateway = TradeGateway(server, account_id)
         self.grid_manager = GridJobManager(self.gateway)
         self.history_gateway = HistoryGateway(server, account_id)
+
+        # Telegram notification bookkeeping (see handlers.py):
+        self.has_synced_once = False   # skip diffing "new/modified order" on the very first snapshot
+        self.last_drawdown_tier = 0    # 0/50/60/70/100, edge-triggered so we don't spam every second
 
     def summary(self) -> dict:
         """Compact info for the accounts overview page."""
@@ -80,6 +85,9 @@ class SessionManager:
         session.info = info
         session.connected = True
         await self._notify()
+
+        broker = info.get("broker", "")
+        await telegram_notify.notify(account_id, f"🟢 Tài khoản {account_id} ({broker}) đã kết nối")
 
     def on_client_disconnect(self, client: Client) -> None:
         session = self.sessions.get(client.account_id) if client.account_id else None
