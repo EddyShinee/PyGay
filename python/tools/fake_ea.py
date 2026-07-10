@@ -19,6 +19,11 @@ HOST, PORT = "127.0.0.1", 9090
 SYMBOL = "EURUSD"
 POINT = 0.00001
 CONTRACT_SIZE = 100000
+FAKE_SYMBOLS = ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "AUDUSD", "USDCAD"]
+TIMEFRAME_SECONDS = {
+    "M1": 60, "M5": 300, "M15": 900, "M30": 1800,
+    "H1": 3600, "H4": 14400, "D1": 86400, "W1": 604800, "MN1": 2592000,
+}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s fake_ea %(message)s")
 log = logging.getLogger("fake_ea")
@@ -80,6 +85,25 @@ class FakeEA:
             "time_open": p["time_open"], "time_close": int(time.time()),
         }
 
+    def fake_bars(self, timeframe: str, count: int) -> list[dict]:
+        tf_seconds = TIMEFRAME_SECONDS.get(timeframe, 60)
+        now = int(time.time())
+        start = now - (count - 1) * tf_seconds
+        price = self.bid
+        bars = []
+        for i in range(count):
+            drift = random.uniform(-0.0004, 0.0004)
+            open_ = price
+            close = round(price + drift, 5)
+            high = round(max(open_, close) + random.uniform(0, 0.0003), 5)
+            low = round(min(open_, close) - random.uniform(0, 0.0003), 5)
+            bars.append({
+                "time": start + i * tf_seconds, "open": open_, "high": high,
+                "low": low, "close": close, "tick_volume": random.randint(10, 200), "spread": 2,
+            })
+            price = close
+        return bars
+
     def account_message(self) -> dict:
         floating = sum(p["profit"] for p in self.positions.values())
         equity = self.balance + floating
@@ -102,6 +126,8 @@ async def main() -> None:
     async def send(msg: dict) -> None:
         writer.write((json.dumps(msg) + "\n").encode())
         await writer.drain()
+
+    await send({"type": "symbols", "list": ",".join(FAKE_SYMBOLS)})
 
     async def send_snapshot() -> None:
         ea.update_profit()
@@ -166,6 +192,17 @@ async def main() -> None:
             if action in ("BUY", "SELL"):
                 ea.open_order(action, msg.get("volume", 0.01), msg.get("sl", 0), msg.get("tp", 0))
                 await send_snapshot()
+
+        elif msg_type == "get_history":
+            symbol = msg.get("symbol", SYMBOL)
+            timeframe = msg.get("timeframe", "M1")
+            count = int(msg.get("count", 1000))
+            bars = ea.fake_bars(timeframe, count)
+            await send({"type": "history_begin", "id": req_id, "symbol": symbol,
+                        "timeframe": timeframe, "count": len(bars)})
+            for bar in bars:
+                await send({"type": "bar", "id": req_id, **bar})
+            await send({"type": "history_end", "id": req_id})
 
     async def handle_incoming() -> None:
         buffer = b""

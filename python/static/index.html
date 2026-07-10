@@ -104,7 +104,7 @@
   <div class="panel">
     <div class="toolbar" style="margin-bottom:10px">
       <label style="font-size:12px;color:var(--muted)">Lệnh nhanh</label>
-      <input id="q_symbol" type="text" value="EURUSD" style="width:90px" />
+      <select id="q_symbol" style="width:110px"></select>
       <input id="q_lot" type="number" step="0.01" min="0.01" value="0.01" style="width:80px" placeholder="Lot" />
       <button class="buy-btn" onclick="quickOrder('BUY')">BUY</button>
       <button class="sell-btn" onclick="quickOrder('SELL')">SELL</button>
@@ -190,7 +190,7 @@
     <h2>Thêm lệnh</h2>
     <div class="form-grid">
       <label>Symbol
-        <input id="f_symbol" type="text" value="EURUSD" />
+        <select id="f_symbol"></select>
       </label>
       <label>Hướng lệnh
         <select id="f_side"><option value="BUY">BUY</option><option value="SELL">SELL</option></select>
@@ -477,6 +477,25 @@ function connectAccountWs() {
   ws.onerror = () => ws.close();
 }
 connectAccountWs();
+
+function renderSymbolOptions(symbols) {
+  const opts = symbols.map(s => `<option value="${s}">${s}</option>`).join('');
+  for (const id of ['q_symbol', 'f_symbol']) {
+    const el = document.getElementById(id);
+    const current = el.value;
+    el.innerHTML = opts;
+    if (symbols.includes(current)) el.value = current;
+  }
+}
+
+function connectSymbolsWs() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/symbols`);
+  ws.onmessage = (ev) => renderSymbolOptions(JSON.parse(ev.data));
+  ws.onclose = () => setTimeout(connectSymbolsWs, 2000);
+  ws.onerror = () => ws.close();
+}
+connectSymbolsWs();
 
 function profitBar(value, maxAbs, side) {
   const pct = maxAbs > 0 ? Math.min(100, Math.abs(value) / maxAbs * 100) : 0;

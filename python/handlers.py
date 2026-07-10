@@ -15,6 +15,8 @@ from trade_gateway import TradeGateway
 from grid_jobs import GridJobManager
 from price_cache import PriceCache
 from account_store import AccountStore
+from symbol_store import SymbolStore
+from history_gateway import HistoryGateway
 from models import Position
 import db
 
@@ -25,7 +27,8 @@ ACCOUNT_FIELDS = ("balance", "equity", "margin", "margin_free", "margin_level", 
 
 def register(server: SocketServer, store: PositionStore, gateway: TradeGateway,
              grid_manager: GridJobManager, price_cache: PriceCache,
-             account_store: AccountStore) -> None:
+             account_store: AccountStore, symbol_store: SymbolStore,
+             history_gateway: HistoryGateway) -> None:
     """Attach all message handlers to the server. Add new ones here."""
 
     @server.on("ping")
@@ -67,6 +70,24 @@ def register(server: SocketServer, store: PositionStore, gateway: TradeGateway,
     @server.on("account")
     async def on_account(client: Client, message: dict) -> None:
         await account_store.update({k: message[k] for k in ACCOUNT_FIELDS if k in message})
+
+    @server.on("symbols")
+    async def on_symbols(client: Client, message: dict) -> None:
+        raw = message.get("list", "")
+        symbols = [s for s in raw.split(",") if s]
+        await symbol_store.update(symbols)
+
+    @server.on("history_begin")
+    async def on_history_begin(client: Client, message: dict) -> None:
+        pass  # nothing to do - HistoryGateway.fetch() already starts with an empty list
+
+    @server.on("bar")
+    async def on_bar(client: Client, message: dict) -> None:
+        history_gateway.on_bar(message)
+
+    @server.on("history_end")
+    async def on_history_end(client: Client, message: dict) -> None:
+        history_gateway.on_end(message)
 
     @server.on("deal_closed")
     async def on_deal_closed(client: Client, message: dict) -> None:

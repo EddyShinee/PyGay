@@ -19,6 +19,9 @@ from trade_gateway import TradeGateway
 from grid_jobs import GridJobManager
 from price_cache import PriceCache
 from account_store import AccountStore
+from symbol_store import SymbolStore
+from history_gateway import HistoryGateway
+import history
 import db
 
 logger = logging.getLogger("web")
@@ -58,6 +61,12 @@ class MagicRequest(BaseModel):
     magic: int
 
 
+class HistoryFetchRequest(BaseModel):
+    symbol: str
+    timeframe: Literal["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1"] = "M1"
+    count: int = 1000
+
+
 def _account_response(store: PositionStore, account_store: AccountStore) -> dict:
     positions = store.snapshot()
     buy = [p for p in positions if p["side"] == "BUY"]
@@ -75,7 +84,8 @@ def _account_response(store: PositionStore, account_store: AccountStore) -> dict
 
 def create_app(store: PositionStore, gateway: TradeGateway,
                 grid_manager: GridJobManager, price_cache: PriceCache,
-                account_store: AccountStore) -> FastAPI:
+                account_store: AccountStore, symbol_store: SymbolStore,
+                history_gateway: HistoryGateway) -> FastAPI:
     app = FastAPI(title="MT5 Dashboard")
 
     @app.get("/api/positions")
@@ -85,6 +95,10 @@ def create_app(store: PositionStore, gateway: TradeGateway,
     @app.get("/api/account")
     async def get_account():
         return _account_response(store, account_store)
+
+    @app.get("/api/symbols")
+    async def get_symbols():
+        return {"symbols": symbol_store.snapshot()}
 
     @app.get("/api/insights")
     async def get_insights(bucket: Literal["minute", "hour", "day", "month", "year"] = "day",
@@ -160,6 +174,18 @@ def create_app(store: PositionStore, gateway: TradeGateway,
             raise HTTPException(400, result.get("error", "set magic failed"))
         return result
 
+    @app.post("/api/history/fetch")
+    async def fetch_history(req: HistoryFetchRequest):
+        """Pull `count` bars from the EA and append new ones to CSV. Meant to
+        be called by an external cron job (see tools/fetch_history_cron.py) -
+        this process must already be running since it owns the live EA link."""
+        try:
+            bars = await history_gateway.fetch(req.symbol, req.timeframe, req.count)
+        except (RuntimeError, asyncio.TimeoutError) as exc:
+            raise HTTPException(400, str(exc))
+        saved = history.append_bars(req.symbol, req.timeframe, bars)
+        return {"symbol": req.symbol, "timeframe": req.timeframe, "fetched": len(bars), "saved": saved}
+
     @app.websocket("/ws/positions")
     async def ws_positions(ws: WebSocket):
         await ws.accept()
@@ -190,6 +216,20 @@ def create_app(store: PositionStore, gateway: TradeGateway,
             pass
         finally:
             account_store.unsubscribe(queue)
+
+    @app.websocket("/ws/symbols")
+    async def ws_symbols(ws: WebSocket):
+        await ws.accept()
+        queue = symbol_store.subscribe()
+        try:
+            await ws.send_json(symbol_store.snapshot())
+            while True:
+                snapshot = await queue.get()
+                await ws.send_json(snapshot)
+        except WebSocketDisconnect:
+            pass
+        finally:
+            symbol_store.unsubscribe(queue)
 
     app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
     return app

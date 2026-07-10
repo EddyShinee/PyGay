@@ -9,6 +9,8 @@ from trade_gateway import TradeGateway
 from grid_jobs import GridJobManager
 from price_cache import PriceCache
 from account_store import AccountStore
+from symbol_store import SymbolStore
+from history_gateway import HistoryGateway
 import db
 import handlers
 import web
@@ -26,9 +28,13 @@ async def run() -> None:
     grid_manager = GridJobManager(gateway)
     price_cache = PriceCache()
     account_store = AccountStore()
-    handlers.register(server, store, gateway, grid_manager, price_cache, account_store)
+    symbol_store = SymbolStore()
+    history_gateway = HistoryGateway(server)
+    handlers.register(server, store, gateway, grid_manager, price_cache,
+                       account_store, symbol_store, history_gateway)
 
-    app = web.create_app(store, gateway, grid_manager, price_cache, account_store)
+    app = web.create_app(store, gateway, grid_manager, price_cache,
+                          account_store, symbol_store, history_gateway)
     web_config = uvicorn.Config(app, host=WEB_HOST, port=WEB_PORT, log_level="info")
     web_server = uvicorn.Server(web_config)
 

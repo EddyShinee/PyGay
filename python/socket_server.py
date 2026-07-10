@@ -50,7 +50,9 @@ class SocketServer:
         self.host = host
         self.port = port
         self._handlers: dict[str, Handler] = {}
-        self._clients: set[Client] = set()
+        # List, not set: order must reflect connection order so clients()[-1]
+        # reliably means "most recently connected" (see TradeGateway).
+        self._clients: list[Client] = []
         self._server: Optional[asyncio.AbstractServer] = None
 
     def on(self, msg_type: str):
@@ -79,7 +81,19 @@ class SocketServer:
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         client = Client(reader, writer)
-        self._clients.add(client)
+
+        # Only one EA/terminal is supported at a time (see README). If an old
+        # connection is still lingering (e.g. the EA was recompiled/reattached
+        # without a clean disconnect), close it now - otherwise it can outlive
+        # its usefulness in self._clients and get picked by TradeGateway,
+        # which then sends into a dead socket and times out waiting for a
+        # reply that will never come.
+        for stale in list(self._clients):
+            logger.warning("closing stale client %s (new client connecting)", stale.address)
+            await stale.close()
+        self._clients.clear()
+
+        self._clients.append(client)
         logger.info("client connected: %s", client.address)
         buffer = b""
         try:
@@ -94,7 +108,8 @@ class SocketServer:
         except (ConnectionResetError, asyncio.IncompleteReadError):
             pass
         finally:
-            self._clients.discard(client)
+            if client in self._clients:
+                self._clients.remove(client)
             await client.close()
             logger.info("client disconnected: %s", client.address)
 
