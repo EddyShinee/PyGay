@@ -450,13 +450,16 @@ void SendPositionsSnapshot()
 
 void SendAccountInfo()
 {
+   double margin = AccountMargin();
+   double margin_level = (margin > 0.0) ? (AccountEquity() / margin * 100.0) : 0.0;
+
    CJson msg;
    msg.AddString("type", "account");
    msg.AddDouble("balance", AccountBalance(), 2);
    msg.AddDouble("equity", AccountEquity(), 2);
-   msg.AddDouble("margin", AccountMargin(), 2);
+   msg.AddDouble("margin", margin, 2);
    msg.AddDouble("margin_free", AccountFreeMargin(), 2);
-   msg.AddDouble("margin_level", AccountMarginLevel(), 2);
+   msg.AddDouble("margin_level", margin_level, 2);
    msg.AddString("currency", AccountCurrency());
    msg.AddInt("leverage", AccountLeverage());
    msg.AddInt("magic", g_magic);
