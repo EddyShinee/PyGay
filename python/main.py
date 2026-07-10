@@ -7,7 +7,7 @@ import uvicorn
 from dotenv import load_dotenv
 from starlette.middleware.sessions import SessionMiddleware
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 from socket_server import SocketServer
 from session_manager import SessionManager

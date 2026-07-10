@@ -11,12 +11,13 @@ import hmac
 import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import httpx
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 MIN_PASSWORD_LENGTH = 8
 PBKDF2_ITERATIONS = 200_000
@@ -49,14 +50,18 @@ class AuthUser:
 def _supabase_url() -> str:
     url = os.environ.get("SUPABASE_URL", "").rstrip("/")
     if not url:
-        raise AuthConfigError("Thiếu SUPABASE_URL trong .env")
+        raise AuthConfigError(
+            "Thiếu SUPABASE_URL. Tạo file python/.env (copy từ .env.example)"
+        )
     return url
 
 
 def _supabase_key() -> str:
     key = os.environ.get("SUPABASE_KEY", "")
     if not key:
-        raise AuthConfigError("Thiếu SUPABASE_KEY trong .env")
+        raise AuthConfigError(
+            "Thiếu SUPABASE_KEY. Tạo file python/.env (copy từ .env.example)"
+        )
     return key
 
 
