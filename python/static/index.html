@@ -6,37 +6,110 @@
 <title>MT5 Dashboard</title>
 <style>
   :root {
-    --bg: #0f1420; --panel: #161d2e; --border: #2a3348; --text: #e6e9f0;
-    --muted: #8a93a8; --accent: #4d8dff;
-    /* status = lãi/lỗ (polarity); series-buy/sell = định danh BUY/SELL (identity) -
-       tách riêng hai kênh màu để không nhầm SELL với "xấu" hay BUY với "tốt" */
-    --green: #0ca30c; --red: #d03b3b;
-    --series-buy: #3987e5; --series-sell: #d95926;
+    --bg: #0b0f17;
+    --bg-elevated: #111827;
+    --panel: #151c2c;
+    --panel-hover: #1a2236;
+    --border: rgba(148, 163, 184, 0.12);
+    --border-strong: rgba(148, 163, 184, 0.22);
+    --text: #f1f5f9;
+    --muted: #94a3b8;
+    --accent: #3b82f6;
+    --accent-soft: rgba(59, 130, 246, 0.14);
+    --green: #22c55e;
+    --green-soft: rgba(34, 197, 94, 0.14);
+    --red: #ef4444;
+    --red-soft: rgba(239, 68, 68, 0.14);
+    --series-buy: #3b82f6;
+    --series-sell: #f97316;
+    --radius: 12px;
+    --radius-sm: 8px;
+    --shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+    --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.25);
   }
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
-         background: var(--bg); color: var(--text); font-size: 14px; }
-  header { display: flex; align-items: center; justify-content: space-between;
-           padding: 14px 20px; border-bottom: 1px solid var(--border); }
-  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
-  #status { font-size: 12px; padding: 3px 10px; border-radius: 10px; }
-  #status.up { background: rgba(46,204,113,.15); color: var(--green); }
-  #status.down { background: rgba(255,92,92,.15); color: var(--red); }
-  main { padding: 20px; max-width: 1100px; margin: 0 auto; }
-  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-           padding: 16px; margin-bottom: 16px; }
+  html { min-height: 100%; background: var(--bg); }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(11, 15, 23, 0.85);
+    backdrop-filter: blur(12px);
+    position: sticky;
+    top: 0;
+    z-index: 5;
+  }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; letter-spacing: -0.02em; }
+  #status {
+    font-size: 12px;
+    font-weight: 500;
+    padding: 5px 12px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+  }
+  #status.up { background: var(--green-soft); color: var(--green); border-color: rgba(34, 197, 94, 0.25); }
+  #status.down { background: var(--red-soft); color: var(--red); border-color: rgba(239, 68, 68, 0.25); }
+  main { padding: 24px; max-width: 1100px; margin: 0 auto; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 20px;
+  }
   .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  button { background: var(--accent); color: #fff; border: none; border-radius: 6px;
-           padding: 7px 14px; font-size: 13px; cursor: pointer; }
-  button.secondary { background: #2a3348; }
-  button.danger { background: var(--red); }
-  button.buy-btn { background: var(--series-buy); font-weight: 600; padding: 7px 20px; }
-  button.sell-btn { background: var(--series-sell); font-weight: 600; padding: 7px 20px; }
-  button.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
-  button:hover { filter: brightness(1.1); }
-  button:disabled { opacity: .45; cursor: not-allowed; filter: none; }
-  input, select { background: #0f1420; border: 1px solid var(--border); color: var(--text);
-                  border-radius: 6px; padding: 6px 8px; font-size: 13px; }
+  button {
+    background: linear-gradient(180deg, #4d94ff 0%, var(--accent) 100%);
+    color: #fff;
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: var(--radius-sm);
+    padding: 9px 16px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: transform .12s, filter .12s;
+    box-shadow: 0 1px 2px rgba(0,0,0,.2);
+  }
+  button.secondary {
+    background: rgba(255,255,255,.04);
+    border-color: var(--border-strong);
+    color: var(--text);
+    box-shadow: none;
+  }
+  button.danger { background: linear-gradient(180deg, #f87171 0%, var(--red) 100%); border-color: rgba(255,255,255,.06); }
+  button.buy-btn { background: linear-gradient(180deg, #60a5fa 0%, var(--series-buy) 100%); font-weight: 600; padding: 7px 20px; }
+  button.sell-btn { background: linear-gradient(180deg, #fb923c 0%, var(--series-sell) 100%); font-weight: 600; padding: 7px 20px; }
+  button.ghost { background: transparent; border: 1px solid var(--border-strong); color: var(--text); box-shadow: none; }
+  button:hover:not(:disabled) { filter: brightness(1.06); transform: translateY(-1px); }
+  button:active:not(:disabled) { transform: translateY(0); }
+  button:disabled { opacity: .45; cursor: not-allowed; filter: none; transform: none; }
+  input, select {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+    border-radius: var(--radius-sm);
+    padding: 9px 12px;
+    font-size: 13px;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  input:focus, select:focus {
+    outline: none;
+    border-color: rgba(59, 130, 246, 0.55);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  input::placeholder { color: #64748b; }
   table { width: 100%; border-collapse: collapse; }
   th, td { padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
   th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
@@ -48,10 +121,17 @@
   .sell { color: var(--series-sell); }
   .profit-pos { color: var(--green); }
   .profit-neg { color: var(--red); }
-  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
-  .stat-tile { background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 8px;
-               padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
-  .stat-label { font-size: 11px; color: var(--muted); }
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+  .stat-tile {
+    background: rgba(255,255,255,.03);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .stat-label { font-size: 11px; color: var(--muted); font-weight: 500; }
   .stat-label.buy { color: var(--series-buy); }
   .stat-label.sell { color: var(--series-sell); }
   .stat-value { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -81,51 +161,202 @@
   .empty { color: var(--muted); text-align: center; padding: 20px; }
 
   /* Overview (accounts list) */
-  .detail-header { display: flex; align-items: center; gap: 12px; padding: 12px 20px;
+  .detail-header { display: flex; align-items: center; gap: 12px; padding: 12px 24px;
                     border-bottom: 1px solid var(--border); max-width: 1100px; margin: 0 auto; }
   .detail-header #detailTitle { font-weight: 600; }
   .detail-header .status-dot { margin-right: 4px; }
-  .accounts-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
-  .account-card { background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 10px;
-                  padding: 14px; cursor: pointer; transition: border-color .15s; }
-  .account-card:hover { border-color: var(--accent); }
-  .account-card-top { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; width: 100%; }
-  .account-card-title { font-weight: 600; }
-  .account-card-broker { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
-  .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
-  .status-dot.online { background: var(--green); box-shadow: 0 0 6px var(--green); }
-  .status-dot.offline { background: var(--muted); }
-  .link-panel h2 { margin: 0 0 12px; font-size: 14px; font-weight: 600; }
+  .overview-main { max-width: 960px; }
+
+  .accounts-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 16px;
+  }
+  .account-card {
+    background: linear-gradient(165deg, rgba(255,255,255,.05) 0%, rgba(255,255,255,.02) 100%);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px;
+    cursor: pointer;
+    transition: border-color .2s, transform .2s, box-shadow .2s, background .2s;
+  }
+  .account-card:hover {
+    border-color: rgba(59, 130, 246, 0.35);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow);
+    background: var(--panel-hover);
+  }
+  .account-card-top {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 6px;
+    width: 100%;
+  }
+  .account-card-title {
+    font-weight: 600;
+    font-size: 15px;
+    letter-spacing: -0.01em;
+    line-height: 1.3;
+    flex: 1;
+    min-width: 0;
+    word-break: break-word;
+  }
+  .account-card-broker {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 10px;
+    padding-left: 18px;
+  }
+  .status-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+    margin-top: 5px;
+  }
+  .status-dot.online {
+    background: var(--green);
+    box-shadow: 0 0 0 3px var(--green-soft), 0 0 10px rgba(34, 197, 94, 0.45);
+  }
+  .status-dot.offline { background: #475569; box-shadow: none; }
+
+  #linkModal.edit-mode .modal { border-color: rgba(59, 130, 246, 0.35); }
+  #linkModal.edit-mode .modal-actions button[type="submit"],
+  #linkModal.edit-mode #linkSubmitBtn {
+    background: rgba(255,255,255,.04);
+    color: var(--text);
+    border-color: var(--border-strong);
+    font-weight: 500;
+    box-shadow: none;
+  }
+  .link-modal { width: 440px; }
+  .modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .modal-head h2 { margin: 0; font-size: 15px; }
+  .modal-close {
+    padding: 4px 10px;
+    font-size: 18px;
+    line-height: 1;
+    min-width: 32px;
+  }
+  .overview-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .overview-toolbar h2 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+  .pending-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    border: 1px solid rgba(59, 130, 246, 0.25);
+    border-radius: var(--radius-sm);
+    background: var(--accent-soft);
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .pending-banner:hover {
+    border-color: rgba(59, 130, 246, 0.45);
+    background: rgba(59, 130, 246, 0.2);
+  }
+  .pending-banner-text { font-size: 13px; color: var(--text); }
   .link-grid {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 112px;
-    gap: 10px 8px;
+    grid-template-columns: minmax(0, 1fr) 120px;
+    gap: 12px 10px;
     align-items: end;
+    position: relative;
   }
-  .link-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-  .link-field span { font-size: 11px; color: var(--muted); }
+  .link-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .link-field span {
+    font-size: 12px;
+    color: var(--muted);
+    font-weight: 500;
+  }
   .link-field input { width: 100%; box-sizing: border-box; }
   .link-host { grid-column: 1; }
   .link-port { grid-column: 2; }
-  .link-account { grid-column: 1; grid-row: 2; }
-  .link-actions-row {
-    display: flex;
+  .link-account { grid-column: 1 / -1; }
+  .account-card-socket {
+    display: inline-flex;
+    align-items: center;
+    font-size: 11px;
+    color: var(--muted);
+    margin: 0 0 14px 18px;
+    padding: 4px 10px;
+    background: rgba(255,255,255,.04);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, monospace;
+  }
+  .account-card-stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
     gap: 8px;
-    margin-top: 10px;
   }
-  .link-actions-row button { flex: 1; }
-  .account-card-socket { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+  .account-card-stats .stat-tile {
+    padding: 10px 12px;
+    background: rgba(0,0,0,.18);
+  }
+  .account-card-stats .stat-value { font-size: 16px; }
   .account-card-edit {
-    font-size: 11px; color: var(--accent); margin-left: auto; cursor: pointer;
-    border: none; background: none; padding: 0;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--accent);
+    margin-left: auto;
+    cursor: pointer;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    background: var(--accent-soft);
+    padding: 4px 10px;
+    border-radius: 999px;
+    flex-shrink: 0;
+    transition: background .15s, border-color .15s;
   }
-  .account-card-edit:hover { text-decoration: underline; }
+  .account-card-edit:hover {
+    background: rgba(59, 130, 246, 0.22);
+    border-color: rgba(59, 130, 246, 0.5);
+  }
   .pending-list { display: grid; gap: 8px; margin-top: 12px; }
-  .pending-card { display: flex; align-items: center; justify-content: space-between; gap: 12px;
-                  padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
-                  background: rgba(255,255,255,.02); }
-  .pending-meta { font-size: 12px; color: var(--muted); }
-  .link-error { color: var(--red); font-size: 12px; margin-top: 8px; min-height: 16px; }
+  .pending-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: rgba(255,255,255,.02);
+    transition: border-color .15s;
+  }
+  .pending-card:hover { border-color: var(--border-strong); }
+  .pending-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .link-error { color: var(--red); font-size: 12px; margin-top: 10px; min-height: 16px; }
+  .accounts-panel { padding: 20px; }
+  .accounts-panel:has(.accounts-list:not(:empty)) { padding-top: 20px; }
+
+  @media (max-width: 560px) {
+    main, header { padding-left: 16px; padding-right: 16px; }
+    .link-grid { grid-template-columns: 1fr; }
+    .link-port { grid-column: 1; }
+    .accounts-list { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
@@ -139,38 +370,19 @@
 </header>
 
 <div id="overviewView">
-  <main style="max-width:900px">
-    <div class="panel link-panel">
-      <h2>Quản lý tài khoản MT5</h2>
-      <div class="link-grid">
-        <label class="link-field link-host">
-          <span>IP (InpHost)</span>
-          <input id="eaSocketHost" type="text" placeholder="127.0.0.1" autocomplete="off" />
-        </label>
-        <label class="link-field link-port">
-          <span>Port (InpPort)</span>
-          <input id="eaSocketPort" type="number" min="1" max="65535" placeholder="9090" />
-        </label>
-        <label class="link-field link-account">
-          <span>Số tài khoản MT5</span>
-          <input id="linkAccountId" type="text" inputmode="numeric" pattern="[0-9]{5,12}"
-                 placeholder="Login MT5" />
-        </label>
-      </div>
-      <div class="link-actions-row">
-        <button type="button" onclick="linkAccountManual()">Gắn tài khoản</button>
-        <button type="button" class="secondary" onclick="updateAccountSocket()">Cập nhật IP/Port</button>
-      </div>
-      <div class="link-error" id="linkError"></div>
-      <div id="pendingSection" style="display:none; margin-top:16px">
-        <h2 style="font-size:13px;margin:0 0 8px">Tài khoản chờ gắn (EA vừa kết nối)</h2>
-        <div id="pendingList" class="pending-list"></div>
-      </div>
+  <main class="overview-main">
+    <div class="overview-toolbar">
+      <h2>Tài khoản MT5</h2>
+      <button type="button" onclick="openLinkModal()">+ Thêm tài khoản</button>
     </div>
-    <div class="panel">
+    <div id="pendingBanner" class="pending-banner" style="display:none" onclick="openLinkModal()">
+      <span class="pending-banner-text" id="pendingBannerText"></span>
+      <button type="button" class="secondary" onclick="event.stopPropagation(); openLinkModal()">Xem</button>
+    </div>
+    <div class="panel accounts-panel">
       <div id="accountsList" class="accounts-list"></div>
       <div id="accountsEmpty" class="empty" style="display:none">
-        Chưa có tài khoản MT5 nào được gắn. Gắn EA vào chart, rồi nhập số login hoặc bấm gắn từ danh sách chờ.
+        Chưa có tài khoản MT5 nào được gắn. Bấm <b>+ Thêm tài khoản</b> hoặc gắn EA vào chart.
       </div>
     </div>
   </main>
@@ -289,6 +501,39 @@
       </div>
     </div>
   </main>
+</div>
+
+<div class="modal-backdrop" id="linkModal" onclick="if(event.target===this) closeLinkModal()">
+  <div class="modal link-modal">
+    <div class="modal-head">
+      <h2 id="linkModalTitle">Quản lý tài khoản MT5</h2>
+      <button type="button" class="ghost modal-close" onclick="closeLinkModal()" aria-label="Đóng">&times;</button>
+    </div>
+    <div class="link-grid">
+      <label class="link-field link-host">
+        <span>IP (InpHost)</span>
+        <input id="eaSocketHost" type="text" placeholder="127.0.0.1" autocomplete="off" />
+      </label>
+      <label class="link-field link-port">
+        <span>Port (InpPort)</span>
+        <input id="eaSocketPort" type="number" min="1" max="65535" placeholder="9090" />
+      </label>
+      <label class="link-field link-account">
+        <span>Số tài khoản MT5</span>
+        <input id="linkAccountId" type="text" inputmode="numeric" pattern="[0-9]{5,12}"
+               placeholder="Login MT5" />
+      </label>
+    </div>
+    <div class="link-error" id="linkError"></div>
+    <div id="pendingSection" style="display:none; margin-top:16px">
+      <h2 style="font-size:13px;margin:0 0 8px">Tài khoản chờ gắn (EA vừa kết nối)</h2>
+      <div id="pendingList" class="pending-list"></div>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="ghost" onclick="closeLinkModal()">Hủy</button>
+      <button type="button" id="linkSubmitBtn" onclick="submitLinkForm()">Thêm mới</button>
+    </div>
+  </div>
 </div>
 
 <div class="modal-backdrop" id="orderModal">
@@ -459,7 +704,7 @@ function renderAccountsList() {
       </div>
       <div class="account-card-broker">#${a.account_id} · ${a.broker || 'chưa kết nối EA'}</div>
       <div class="account-card-socket">EA → ${a.socket_host || '127.0.0.1'}:${a.socket_port || 9090}</div>
-      <div class="stat-grid">
+      <div class="stat-grid account-card-stats">
         <div class="stat-tile"><span class="stat-label">Balance</span><span class="stat-value">${a.balance != null ? fmt(a.balance) : '—'}</span></div>
         <div class="stat-tile"><span class="stat-label">Equity</span><span class="stat-value">${a.equity != null ? fmt(a.equity) : '—'}</span></div>
         <div class="stat-tile"><span class="stat-label">Lãi/lỗ trôi nổi</span><span class="stat-value ${(a.floating_profit || 0) >= 0 ? 'profit-pos' : 'profit-neg'}">${fmt(a.floating_profit)}</span></div>
@@ -475,9 +720,12 @@ async function loadPendingAccounts() {
     const pending = data.pending || [];
     const section = document.getElementById('pendingSection');
     const list = document.getElementById('pendingList');
+    const banner = document.getElementById('pendingBanner');
+    const bannerText = document.getElementById('pendingBannerText');
     if (!pending.length) {
       section.style.display = 'none';
       list.innerHTML = '';
+      if (banner) banner.style.display = 'none';
       return;
     }
     section.style.display = 'block';
@@ -490,6 +738,12 @@ async function loadPendingAccounts() {
         <button type="button" onclick="linkAccountDiscovered('${a.account_id}')">Gắn với tài khoản của tôi</button>
       </div>
     `).join('');
+    if (banner && bannerText && currentAccountId === null) {
+      banner.style.display = 'flex';
+      bannerText.textContent = `${pending.length} tài khoản EA chờ gắn`;
+    } else if (banner) {
+      banner.style.display = 'none';
+    }
   } catch (e) {
     /* ignore pending errors on overview */
   }
@@ -519,13 +773,62 @@ function loadEaSocketSettings() {
   if (!portEl.value) portEl.placeholder = String(EA_SOCKET_DEFAULT_PORT);
 }
 
-function fillLinkForm(accountId) {
-  const a = accountsCache.find(x => x.account_id === accountId);
-  document.getElementById('linkAccountId').value = accountId;
-  document.getElementById('eaSocketHost').value = a?.socket_host || EA_SOCKET_DEFAULT_HOST;
-  document.getElementById('eaSocketPort').value = a?.socket_port || EA_SOCKET_DEFAULT_PORT;
+function isLinkFormEditMode() {
+  const accountId = document.getElementById('linkAccountId')?.value.trim();
+  if (!accountId) return false;
+  return accountsCache.some(x => x.account_id === accountId);
+}
+
+function updateLinkFormMode() {
+  const btn = document.getElementById('linkSubmitBtn');
+  const modal = document.getElementById('linkModal');
+  const title = document.getElementById('linkModalTitle');
+  if (!btn) return;
+  const editing = isLinkFormEditMode();
+  btn.textContent = editing ? 'Cập nhật' : 'Thêm mới';
+  modal?.classList.toggle('edit-mode', editing);
+  if (title) {
+    title.textContent = editing ? 'Cập nhật tài khoản MT5' : 'Quản lý tài khoản MT5';
+  }
+}
+
+function clearLinkForm() {
+  document.getElementById('linkAccountId').value = '';
+  document.getElementById('eaSocketHost').value = '';
+  document.getElementById('eaSocketPort').value = '';
   document.getElementById('linkError').textContent = '';
-  document.querySelector('.link-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  loadEaSocketSettings();
+  updateLinkFormMode();
+}
+
+function openLinkModal(accountId) {
+  if (accountId) {
+    const a = accountsCache.find(x => x.account_id === accountId);
+    document.getElementById('linkAccountId').value = accountId;
+    document.getElementById('eaSocketHost').value = a?.socket_host || EA_SOCKET_DEFAULT_HOST;
+    document.getElementById('eaSocketPort').value = a?.socket_port || EA_SOCKET_DEFAULT_PORT;
+    document.getElementById('linkError').textContent = '';
+    updateLinkFormMode();
+  } else {
+    clearLinkForm();
+  }
+  document.getElementById('linkModal').classList.add('open');
+}
+
+function closeLinkModal() {
+  document.getElementById('linkModal').classList.remove('open');
+}
+
+function fillLinkForm(accountId) {
+  openLinkModal(accountId);
+}
+
+async function submitLinkForm() {
+  if (isLinkFormEditMode()) {
+    await updateAccountSocket();
+  } else {
+    await linkAccountManual();
+  }
 }
 
 async function updateAccountSocket() {
@@ -541,6 +844,8 @@ async function updateAccountSocket() {
   try {
     await api(`/api/accounts/${accountId}/socket`, 'PUT', { socket_host, socket_port });
     await refreshOverviewAccounts();
+    clearLinkForm();
+    closeLinkModal();
     toast(`Đã cập nhật #${accountId} → ${socket_host}:${socket_port}`);
   } catch (err) {
     errorEl.textContent = err.message;
@@ -559,7 +864,8 @@ async function linkAccount(accountId, linkedVia) {
       socket_host,
       socket_port,
     });
-    document.getElementById('linkAccountId').value = '';
+    clearLinkForm();
+    closeLinkModal();
     await refreshOverviewAccounts();
     toast(`Đã gắn #${accountId} — EA trỏ ${socket_host}:${socket_port}`);
   } catch (err) {
@@ -567,13 +873,13 @@ async function linkAccount(accountId, linkedVia) {
   }
 }
 
-function linkAccountManual() {
+async function linkAccountManual() {
   const accountId = document.getElementById('linkAccountId').value.trim();
   if (!accountId) {
     document.getElementById('linkError').textContent = 'Nhập số tài khoản MT5';
     return;
   }
-  linkAccount(accountId, 'manual');
+  await linkAccount(accountId, 'manual');
 }
 
 function linkAccountDiscovered(accountId) {
@@ -605,6 +911,7 @@ function connectAccountsWs() {
     if (currentAccountId === null) {
       renderAccountsList();
       loadPendingAccounts();
+      updateLinkFormMode();
     } else {
       const a = accountsCache.find(x => x.account_id === currentAccountId);
       if (a) {
@@ -617,6 +924,8 @@ function connectAccountsWs() {
 }
 connectAccountsWs();
 loadEaSocketSettings();
+document.getElementById('linkAccountId')?.addEventListener('input', updateLinkFormMode);
+updateLinkFormMode();
 loadPendingAccounts();
 setInterval(loadPendingAccounts, 10000);
 showOverview();
