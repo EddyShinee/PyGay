@@ -1,0 +1,31 @@
+[
+    {
+        "directory": "/Users/thuanvu/Documents/PyGay",
+        "arguments": [
+            "clang++",
+            "-xc++",
+            "-std=c++17",
+            "-D__MQL__",
+            "-D__MQL5__",
+            "-include/Users/thuanvu/.cursor/extensions/ngsoftware.mql-clangd-1.1.62-universal/files/mql_clangd_compat.h",
+            "-include/Users/thuanvu/Documents/PyGay/.mql-auto-forwards/SocketBridgeEA.d5cf4c63.auto.mqh",
+            "-fms-extensions",
+            "-fms-compatibility",
+            "-ferror-limit=0",
+            "-Wno-invalid-token-paste",
+            "-Wno-unused-value",
+            "-Wno-unknown-pragmas",
+            "-Wno-writable-strings",
+            "-Xclang",
+            "-Wno-invalid-pp-directive",
+            "-Wno-unknown-directives",
+            "-Wno-language-extension-token",
+            "-I/Users/thuanvu/Documents/PyGay",
+            "-I/Users/thuanvu/Documents/PyGay/Include",
+            "-D__MQL5_BUILD__",
+            "-c",
+            "/Users/thuanvu/Documents/PyGay/mql5/Experts/SocketBridgeEA.mq5"
+        ],
+        "file": "/Users/thuanvu/Documents/PyGay/mql5/Experts/SocketBridgeEA.mq5"
+    }
+]
