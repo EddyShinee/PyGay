@@ -119,6 +119,7 @@ void SendHello()
 {
    CJson msg;
    msg.AddString("type", "hello");
+   msg.AddString("platform", "mt5");
    msg.AddInt("account_id", AccountInfoInteger(ACCOUNT_LOGIN));
    msg.AddString("broker", AccountInfoString(ACCOUNT_COMPANY));
    msg.AddString("name", AccountInfoString(ACCOUNT_NAME));

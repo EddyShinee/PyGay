@@ -134,7 +134,7 @@ async def main(account_id: str, ticket_start: int) -> None:
         await writer.drain()
 
     await send({
-        "type": "hello", "account_id": account_id,
+        "type": "hello", "account_id": account_id, "platform": "mt5",
         "broker": "FakeBroker Ltd", "name": f"Demo {account_id}", "currency": "USD",
     })
     await send({"type": "symbols", "list": ",".join(FAKE_SYMBOLS)})

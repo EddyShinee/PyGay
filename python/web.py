@@ -124,6 +124,7 @@ def _offline_account_summary(
         "connected": False,
         "broker": "",
         "name": "",
+        "platform": "",
         "currency": "",
         "balance": None,
         "equity": None,
@@ -189,6 +190,7 @@ def _account_response(session: AccountSession) -> dict:
         "account_id": session.account_id,
         "broker": session.info.get("broker", ""),
         "name": session.info.get("name", ""),
+        "platform": session.info.get("platform", ""),
         "connected": session.connected,
         "floating_profit": session.store.total_profit(),
         "open_count": len(positions),
@@ -200,7 +202,7 @@ def _account_response(session: AccountSession) -> dict:
 
 
 def create_app(sessions: SessionManager) -> FastAPI:
-    app = FastAPI(title="MT5 Dashboard")
+    app = FastAPI(title="MetaTrader Dashboard")
     # Every trading route below requires a logged-in web user - grouped in
     # one router with a shared dependency instead of repeating Depends()
     # on ~13 routes individually.
@@ -211,7 +213,7 @@ def create_app(sessions: SessionManager) -> FastAPI:
         try:
             if not _user_owns_account(user_id, account_id):
                 raise HTTPException(
-                    403, f"Bạn chưa gắn tài khoản MT5 #{account_id}"
+                    403, f"Bạn chưa gắn tài khoản MetaTrader #{account_id}"
                 )
         except account_links.LinkConfigError as exc:
             raise HTTPException(500, str(exc))
@@ -315,7 +317,7 @@ def create_app(sessions: SessionManager) -> FastAPI:
         except account_links.LinkUnavailable as exc:
             raise HTTPException(503, str(exc))
         if not removed:
-            raise HTTPException(404, f"Chưa gắn tài khoản MT5 #{account_id}")
+            raise HTTPException(404, f"Chưa gắn tài khoản MetaTrader #{account_id}")
         return {"ok": True}
 
     @protected.get("/api/{account_id}/positions")

@@ -47,6 +47,7 @@ class AccountSession:
             "connected": self.connected,
             "broker": self.info.get("broker", ""),
             "name": self.info.get("name", ""),
+            "platform": self.info.get("platform", ""),
             "currency": self.info.get("currency", account.get("currency", "")),
             "balance": account.get("balance"),
             "equity": account.get("equity"),

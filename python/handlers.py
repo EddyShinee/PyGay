@@ -48,6 +48,7 @@ def register(server: SocketServer, sessions: SessionManager) -> None:
             "broker": message.get("broker", ""),
             "name": message.get("name", ""),
             "currency": message.get("currency", ""),
+            "platform": (message.get("platform") or "").lower(),
         }
         await sessions.bind(client, account_id, info)
         logger.info("hello from account %s (%s)", account_id, info.get("broker"))

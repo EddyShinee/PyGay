@@ -153,6 +153,7 @@ void SendHello()
 {
    CJson msg;
    msg.AddString("type", "hello");
+   msg.AddString("platform", "mt4");
    msg.AddInt("account_id", AccountNumber());
    msg.AddString("broker", AccountCompany());
    msg.AddString("name", AccountName());
