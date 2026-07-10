@@ -8,8 +8,8 @@ this file only knows about SessionManager/AccountSession, never about the
 raw EA protocol.
 
 All of that is gated behind a login (python/auth.py) - a separate concept
-from MT5 accounts: web users are people allowed to open this dashboard,
-MT5 accounts are the trading accounts it manages.
+from MT5 accounts: web users are people allowed to open this dashboard
+(stored in Supabase Auth), MT5 accounts are the trading accounts it manages.
 """
 import asyncio
 import logging
@@ -283,19 +283,30 @@ def create_app(sessions: SessionManager) -> FastAPI:
     @app.post("/api/auth/register")
     async def register(req: RegisterRequest, request: Request):
         try:
-            user_id = auth.create_user(req.username, req.password)
+            user = auth.create_user(req.username, req.password)
+        except auth.AuthConfigError as exc:
+            raise HTTPException(500, str(exc))
+        except auth.AuthUnavailable as exc:
+            raise HTTPException(503, str(exc))
         except (auth.UsernameTaken, auth.InvalidPassword) as exc:
             raise HTTPException(400, str(exc))
-        request.session["user_id"] = user_id
-        return {"username": req.username.strip()}
+        request.session["user_id"] = user.id
+        request.session["username"] = user.username
+        return {"username": user.username}
 
     @app.post("/api/auth/login")
     async def login(req: LoginRequest, request: Request):
-        user_id = auth.verify_user(req.username, req.password)
-        if user_id is None:
+        try:
+            user = auth.verify_user(req.username, req.password)
+        except auth.AuthConfigError as exc:
+            raise HTTPException(500, str(exc))
+        except auth.AuthUnavailable as exc:
+            raise HTTPException(503, str(exc))
+        if user is None:
             raise HTTPException(401, "Sai tên đăng nhập hoặc mật khẩu")
-        request.session["user_id"] = user_id
-        return {"username": req.username.strip()}
+        request.session["user_id"] = user.id
+        request.session["username"] = user.username
+        return {"username": user.username}
 
     @app.post("/api/auth/logout")
     async def logout(request: Request):
@@ -307,7 +318,11 @@ def create_app(sessions: SessionManager) -> FastAPI:
         user_id = request.session.get("user_id")
         if not user_id:
             raise HTTPException(401, "Chưa đăng nhập")
-        return {"username": auth.get_username(user_id)}
+        return {
+            "username": auth.get_username(
+                user_id, request.session.get("username")
+            ),
+        }
 
     # --- Static pages ---
 

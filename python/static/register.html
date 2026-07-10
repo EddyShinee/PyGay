@@ -34,7 +34,8 @@
   <h1>Tạo tài khoản</h1>
   <form id="registerForm">
     <label>Tên đăng nhập</label>
-    <input id="username" type="text" autocomplete="username" required />
+    <input id="username" type="text" autocomplete="username" pattern="[A-Za-z0-9_]{3,32}" required />
+    <div class="hint">Chữ, số, gạch dưới — 3–32 ký tự</div>
     <label>Mật khẩu</label>
     <input id="password" type="password" autocomplete="new-password" minlength="8" required />
     <div class="hint">Ít nhất 8 ký tự</div>

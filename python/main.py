@@ -4,7 +4,10 @@ import secrets
 from pathlib import Path
 
 import uvicorn
+from dotenv import load_dotenv
 from starlette.middleware.sessions import SessionMiddleware
+
+load_dotenv()
 
 from socket_server import SocketServer
 from session_manager import SessionManager
