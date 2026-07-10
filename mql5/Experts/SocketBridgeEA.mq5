@@ -17,6 +17,7 @@ input int    InpPort               = 9090;
 input int    InpPollMs             = 20;     // socket poll interval (ms) - lower = lower latency
 input int    InpReconnectS         = 3;      // reconnect retry interval (s) while disconnected
 input int    InpPositionsIntervalMs = 1000;  // how often to push a full positions snapshot
+input long   InpMagicNumber         = 123456; // magic number tagged on every order this EA opens
 
 CSocket  g_socket;
 CTrade   g_trade;
@@ -24,10 +25,13 @@ string   g_rx_buffer = "";
 datetime g_last_reconnect_attempt = 0;
 ulong    g_last_positions_ms = 0;
 int      g_last_history_total = 0;
+long     g_magic = 0;
 
 //+------------------------------------------------------------------+
 int OnInit()
 {
+   g_magic = InpMagicNumber;
+   g_trade.SetExpertMagicNumber(g_magic);
    EventSetMillisecondTimer(InpPollMs);
    TryConnect();
    return(INIT_SUCCEEDED);
@@ -96,9 +100,34 @@ void TryConnect()
 {
    g_last_reconnect_attempt = TimeCurrent();
    if(g_socket.Connect(InpHost, InpPort))
+   {
       Print("SocketBridgeEA: connected to ", InpHost, ":", InpPort);
+      SendSymbolList();
+   }
    else
       Print("SocketBridgeEA: connect failed, will retry");
+}
+
+//+------------------------------------------------------------------+
+//| Full broker symbol list, sent once per connection (rarely changes|
+//| mid-session) as a single comma-joined string - no need for the   |
+//| begin/position/end framing used for things that repeat.          |
+//+------------------------------------------------------------------+
+void SendSymbolList()
+{
+   int total = SymbolsTotal(false); // false = every symbol the broker offers
+   string list = "";
+   for(int i = 0; i < total; i++)
+   {
+      if(i > 0)
+         list += ",";
+      list += SymbolName(i, false);
+   }
+
+   CJson msg;
+   msg.AddString("type", "symbols");
+   msg.AddString("list", list);
+   g_socket.Send(msg.Serialize() + "\n");
 }
 
 //+------------------------------------------------------------------+
@@ -145,6 +174,10 @@ void HandleMessage(CJson &msg)
       { HandleCloseAll(msg); return; }
    if(type == "modify_position")
       { HandleModifyPosition(msg); return; }
+   if(type == "set_magic")
+      { HandleSetMagic(msg); return; }
+   if(type == "get_history")
+      { HandleGetHistory(msg); return; }
 
    Print("SocketBridgeEA: unknown message type: ", type);
 }
@@ -274,6 +307,81 @@ void HandleModifyPosition(CJson &msg)
 }
 
 //+------------------------------------------------------------------+
+//| Change the magic number tagged on future orders, at runtime -    |
+//| no need to touch inputs/recompile in MetaEditor.                  |
+//+------------------------------------------------------------------+
+void HandleSetMagic(CJson &msg)
+{
+   string id = msg.GetString("id");
+   g_magic = msg.GetInt("magic", g_magic);
+   g_trade.SetExpertMagicNumber(g_magic);
+   SendOrderResult(id, true, 0, "");
+}
+
+ENUM_TIMEFRAMES StringToTimeframe(const string tf)
+{
+   if(tf == "M1")  return PERIOD_M1;
+   if(tf == "M5")  return PERIOD_M5;
+   if(tf == "M15") return PERIOD_M15;
+   if(tf == "M30") return PERIOD_M30;
+   if(tf == "H1")  return PERIOD_H1;
+   if(tf == "H4")  return PERIOD_H4;
+   if(tf == "D1")  return PERIOD_D1;
+   if(tf == "W1")  return PERIOD_W1;
+   if(tf == "MN1") return PERIOD_MN1;
+   return PERIOD_M1;
+}
+
+//+------------------------------------------------------------------+
+//| Historical OHLC bars for one symbol/timeframe, framed by          |
+//| history_begin/bar/history_end. Triggered on demand (Python's      |
+//| /api/history/fetch), not sent automatically.                      |
+//+------------------------------------------------------------------+
+void HandleGetHistory(CJson &msg)
+{
+   string id      = msg.GetString("id");
+   string symbol  = msg.GetString("symbol", _Symbol);
+   string tf_str  = msg.GetString("timeframe", "M1");
+   int    count   = (int)msg.GetInt("count", 1000);
+   ENUM_TIMEFRAMES tf = StringToTimeframe(tf_str);
+
+   MqlRates rates[];
+   ArraySetAsSeries(rates, false);
+   int copied = CopyRates(symbol, tf, 0, count, rates);
+   if(copied < 0)
+      copied = 0;
+
+   CJson begin;
+   begin.AddString("type", "history_begin");
+   begin.AddString("id", id);
+   begin.AddString("symbol", symbol);
+   begin.AddString("timeframe", tf_str);
+   begin.AddInt("count", copied);
+   g_socket.Send(begin.Serialize() + "\n");
+
+   int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+   for(int i = 0; i < copied; i++)
+   {
+      CJson bar;
+      bar.AddString("type", "bar");
+      bar.AddString("id", id);
+      bar.AddInt("time", (long)rates[i].time);
+      bar.AddDouble("open", rates[i].open, digits);
+      bar.AddDouble("high", rates[i].high, digits);
+      bar.AddDouble("low", rates[i].low, digits);
+      bar.AddDouble("close", rates[i].close, digits);
+      bar.AddInt("tick_volume", (long)rates[i].tick_volume);
+      bar.AddInt("spread", rates[i].spread);
+      g_socket.Send(bar.Serialize() + "\n");
+   }
+
+   CJson end;
+   end.AddString("type", "history_end");
+   end.AddString("id", id);
+   g_socket.Send(end.Serialize() + "\n");
+}
+
+//+------------------------------------------------------------------+
 //| Full snapshot of open positions, framed by positions_begin/end   |
 //+------------------------------------------------------------------+
 void SendPositionsSnapshot()
@@ -307,6 +415,7 @@ void SendPositionsSnapshot()
       msg.AddDouble("profit", PositionGetDouble(POSITION_PROFIT), 2);
       msg.AddDouble("swap", PositionGetDouble(POSITION_SWAP), 2);
       msg.AddInt("time_open", (long)PositionGetInteger(POSITION_TIME));
+      msg.AddInt("magic", (long)PositionGetInteger(POSITION_MAGIC));
       g_socket.Send(msg.Serialize() + "\n");
    }
 
@@ -329,6 +438,7 @@ void SendAccountInfo()
    msg.AddDouble("margin_level", AccountInfoDouble(ACCOUNT_MARGIN_LEVEL), 2);
    msg.AddString("currency", AccountInfoString(ACCOUNT_CURRENCY));
    msg.AddInt("leverage", AccountInfoInteger(ACCOUNT_LEVERAGE));
+   msg.AddInt("magic", g_magic);
    g_socket.Send(msg.Serialize() + "\n");
 }
 

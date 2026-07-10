@@ -22,16 +22,21 @@ python/
   models.py           # dataclass Position
   position_store.py   # snapshot vị thế hiện tại + pub/sub cho WebSocket
   account_store.py      # snapshot tài khoản (balance/equity/margin/...) + pub/sub
-  price_cache.py          # giá bid/ask/point mới nhất theo symbol (từ tick)
-  trade_gateway.py         # gửi lệnh xuống EA, chờ order_result theo id
-  grid_jobs.py               # batch order kiểu grid/DCA (theo dõi tick để bắn lệnh tiếp theo)
-  db.py                        # SQLite: lưu deal đã đóng + query insight theo bucket thời gian
-  web.py                         # FastAPI: REST + WebSocket cho dashboard
-  static/index.html                # giao diện dashboard (vanilla JS, không build step)
-  tools/fake_ea.py                   # giả lập EA để test không cần MT5 thật
-  main.py                              # điểm khởi chạy (chạy chung socket server + web server)
+  symbol_store.py         # danh sách symbol từ sàn (từ EA) + pub/sub
+  price_cache.py            # giá bid/ask/point mới nhất theo symbol (từ tick)
+  trade_gateway.py           # gửi lệnh xuống EA, chờ order_result theo id
+  history_gateway.py           # xin dữ liệu giá lịch sử (OHLC) từ EA, gom theo id
+  history.py                     # ghi bar lịch sử vào CSV, dedupe theo time
+  grid_jobs.py                     # batch order kiểu grid/DCA (theo dõi tick để bắn lệnh tiếp theo)
+  db.py                              # SQLite: lưu deal đã đóng + query insight theo bucket thời gian
+  web.py                               # FastAPI: REST + WebSocket cho dashboard
+  static/index.html                      # giao diện dashboard (vanilla JS, không build step)
+  tools/fake_ea.py                         # giả lập EA để test không cần MT5 thật
+  tools/fetch_history_cron.py                # cron gọi mỗi giờ để lấy giá lịch sử -> CSV
+  main.py                                      # điểm khởi chạy (chạy chung socket server + web server)
   requirements.txt
-  trades.db                             # SQLite, tự tạo khi chạy - không commit (đã .gitignore)
+  trades.db      # SQLite, tự tạo khi chạy - không commit (đã .gitignore)
+  history/         # CSV giá lịch sử theo symbol/timeframe, tự tạo - không commit
 ```
 
 ## Chạy thử
@@ -70,11 +75,13 @@ Mỗi message là một dòng JSON phẳng, kết thúc bằng `\n`.
 |---|---|---|
 | `tick` | symbol, bid, ask, point, time | mỗi tick |
 | `positions_begin` | count | mở đầu 1 đợt snapshot vị thế |
-| `position` | ticket, symbol, side, volume, price_open, sl, tp, profit, swap, time_open | mỗi vị thế đang mở, trong 1 đợt snapshot |
+| `position` | ticket, symbol, side, volume, price_open, sl, tp, profit, swap, time_open, magic | mỗi vị thế đang mở, trong 1 đợt snapshot |
 | `positions_end` | (không có) | kết thúc 1 đợt snapshot vị thế |
-| `order_result` | id, ok, ticket, error | trả lời open_order/close_position/close_all/modify_position |
-| `account` | balance, equity, margin, margin_free, margin_level, currency, leverage | định kỳ, cùng nhịp với snapshot vị thế |
+| `order_result` | id, ok, ticket, error | trả lời open_order/close_position/close_all/modify_position/set_magic |
+| `account` | balance, equity, margin, margin_free, margin_level, currency, leverage, magic | định kỳ, cùng nhịp với snapshot vị thế |
 | `deal_closed` | ticket (=position id), symbol, side, volume, price_open, price_close, profit, swap, commission, time_open, time_close | khi phát hiện 1 vị thế vừa đóng (qua `HistorySelect`), chỉ tính từ lúc EA kết nối - không backfill lịch sử cũ |
+| `symbols` | list (chuỗi symbol cách nhau bởi dấu phẩy) | 1 lần ngay sau khi connect thành công |
+| `history_begin` / `bar` / `history_end` | begin: id, symbol, timeframe, count; bar: id, time, open, high, low, close, tick_volume, spread; end: id | trả lời `get_history`, mỗi bar 1 message, đóng khung bởi begin/end |
 
 Ví dụ tick: `{"type":"tick","symbol":"EURUSD","bid":1.0855,"ask":1.0857,"point":0.00001,"time":1234567890}`
 
@@ -88,9 +95,13 @@ Ví dụ tick: `{"type":"tick","symbol":"EURUSD","bid":1.0855,"ask":1.0857,"poin
 | `close_position` | id, ticket | `CTrade::PositionClose(ticket)` |
 | `close_all` | id, filter (`all`\|`profit`\|`loss`) | đóng các vị thế khớp filter |
 | `modify_position` | id, ticket, sl, tp | `CTrade::PositionModify(ticket, sl, tp)` |
+| `set_magic` | id, magic | `CTrade::SetExpertMagicNumber(magic)` - áp dụng cho mọi lệnh mở sau đó |
+| `get_history` | id, symbol, timeframe (`M1`..`MN1`), count | `CopyRates(...)`, trả về qua `history_begin`/`bar`/`history_end` |
 
-`open_order`/`close_position`/`close_all`/`modify_position` đều có `id` (uuid) để
-Python khớp `order_result` trả về với lời gọi tương ứng (`trade_gateway.py`).
+`open_order`/`close_position`/`close_all`/`modify_position`/`set_magic`/`get_history`
+đều có `id` (uuid) để Python khớp phản hồi (`order_result` hoặc chuỗi
+`history_begin`/`bar`/`history_end`) với lời gọi tương ứng
+(`trade_gateway.py`/`history_gateway.py`).
 
 `close_by_threshold` (đóng khi tổng lãi/lỗ đạt ngưỡng $) không có message EA
 riêng — Python tự tính tổng từ `position_store` rồi gửi `close_all` bình
@@ -101,6 +112,13 @@ phải watcher chạy nền.
 
 Mở `http://127.0.0.1:8000`:
 - Bảng vị thế đang mở, cập nhật realtime qua WebSocket (`/ws/positions`).
+  Click header **Giá vào / Thời gian / Profit** để sort (click lại để đảo
+  chiều tăng/giảm), và ô **Lọc theo ticket** để lọc nhanh 1 lệnh cụ thể -
+  cả hai chỉ ảnh hưởng hiển thị, không ảnh hưởng "Số lệnh"/"Tổng lãi/lỗ".
+- **Lệnh nhanh**: dropdown Symbol (lấy từ danh sách sàn thật trả về qua
+  message `symbols`, không gõ tay) + 2 nút BUY/SELL + ô Lot, vào lệnh
+  market ngay lập tức (không cần mở form). Form "+ Thêm lệnh" cũng dùng
+  chung dropdown này.
 - **+ Thêm lệnh**: đặt 1 lệnh hoặc 1 batch (grid DCA) — count, khoảng cách
   giá (points), hướng giãn giá (ngược/cùng chiều lệnh), khoảng cách thời
   gian giữa các lệnh (giây), lot tăng dần (cộng cố định hoặc nhân hệ số).
@@ -109,6 +127,9 @@ Mở `http://127.0.0.1:8000`:
 - **Đóng lệnh**: từng lệnh, tất cả, chỉ lệnh lãi, chỉ lệnh lỗ, hoặc khi
   tổng lãi/lỗ toàn tài khoản đạt ngưỡng $ nhập tay.
 - **Sửa SL/TP**: sửa trực tiếp trên bảng, nhập giá tuyệt đối.
+- **Magic Number**: ô nhập + nút Lưu, đổi runtime qua message `set_magic`
+  (không cần vào MetaEditor/recompile). Áp dụng cho mọi lệnh mở sau đó qua
+  `CTrade::SetExpertMagicNumber()`; giá trị hiện tại lấy từ `account.magic`.
 - **Panel tài khoản**: Balance, Equity, Margin, Free Margin, Margin Level,
   lãi/lỗ trôi nổi (floating), số lệnh + volume BUY/SELL đang mở - cập nhật
   realtime qua WebSocket (`/ws/account`).
@@ -122,7 +143,34 @@ REST API chính: `GET /api/positions`, `GET /api/account`,
 `GET /api/insights?bucket=day&limit=30`, `GET /api/summary`, `POST /api/orders`,
 `POST /api/positions/{ticket}/close`, `POST /api/positions/close_all`,
 `POST /api/positions/close_by_threshold`, `POST /api/positions/{ticket}/modify`,
-`POST /api/positions/refresh` (yêu cầu EA gửi lại snapshot ngay).
+`POST /api/positions/refresh` (yêu cầu EA gửi lại snapshot ngay),
+`POST /api/magic` (`{"magic": <int>}`).
+
+## Lấy giá lịch sử (cho pipeline ML sau này)
+
+Mục tiêu: tích lũy dữ liệu giá OHLC theo thời gian ra file CSV, để sau này
+dùng huấn luyện model ML, đóng gói ONNX, chạy kèm indicator.
+
+- **Không phải 1 tiến trình nền tự chạy riêng** — vì chỉ có `main.py` đang
+  chạy mới giữ kết nối sống với EA, nên việc lấy lịch sử phải đi qua chính
+  process đó: `POST /api/history/fetch` (`{"symbol","timeframe","count"}`)
+  gọi `history_gateway.py` để xin `CopyRates(...)` từ EA, rồi `history.py`
+  ghi các bar **mới** (so với lần ghi trước, dedupe theo `time`) vào
+  `python/history/{symbol}_{timeframe}.csv`.
+- **Trigger bằng cron của anh** (đúng như yêu cầu, Python không tự lên lịch):
+  thêm `tools/fetch_history_cron.py` vào crontab, chạy mỗi giờ:
+  ```
+  0 * * * * cd /path/to/PyGay/python && .venv/bin/python3 tools/fetch_history_cron.py >> /tmp/fetch_history.log 2>&1
+  ```
+  Sửa danh sách `SYMBOLS = [(symbol, timeframe, count), ...]` trong file đó
+  để thêm/bớt symbol cần thu thập. `main.py` phải đang chạy (và EA đang kết
+  nối) khi cron gọi tới, nếu không sẽ trả lỗi `no EA connected`.
+- `count` nên đủ lớn để phủ hơn khoảng cách giữa 2 lần chạy cron (mặc định
+  M1×1000 ≈ 16.6 giờ dữ liệu cho mỗi lần chạy cách nhau 1 giờ) — nhỡ 1 lần
+  cron lỗi/máy tắt cũng không bị hở dữ liệu ở lần chạy kế tiếp.
+- Lần đầu tiên fetch 1 symbol/timeframe mới, nếu MT5 chưa đồng bộ đủ lịch
+  sử từ broker, `CopyRates` có thể trả về ít bar hơn `count` yêu cầu — gọi
+  lại (cron lần sau) sẽ có thêm khi terminal đã tải xong.
 
 ## Vì sao nhanh (yếu tố thời gian)
 
@@ -164,12 +212,19 @@ nút + hàm `fetch()` trong `static/index.html`.
   cấu trúc phức tạp hơn, mở rộng `Parse()`/`Serialize()` trong file đó. Danh
   sách vị thế vì vậy được truyền dưới dạng nhiều message `position` liên
   tiếp (đóng khung bởi `positions_begin`/`positions_end`) thay vì 1 mảng JSON.
-- Server Python/`trade_gateway.py` giả định **chỉ 1 EA/terminal kết nối**
-  (lấy client kết nối gần nhất). Nếu chạy nhiều EA song song, cần thêm một
-  message `{"type":"hello","account":...}` lúc kết nối để định danh và một
-  cách chọn client theo account ở `trade_gateway.py`.
+- Server Python **chỉ hỗ trợ 1 EA/terminal kết nối tại 1 thời điểm** - đây
+  là giới hạn được chủ động enforce ở `socket_server.py`: khi có kết nối
+  mới, kết nối cũ (nếu còn sót do EA bị recompile/mất kết nối đột ngột) sẽ
+  bị đóng ngay, tránh việc `trade_gateway.py` gửi lệnh vào một socket đã
+  chết và bị timeout chờ phản hồi vô ích. Nếu cần chạy nhiều EA song song
+  sau này, cần thêm message `{"type":"hello","account":...}` lúc kết nối
+  để định danh và một cách chọn client theo account.
 - Dashboard web **chưa có xác thực/đăng nhập** — chỉ nên chạy trên
   `127.0.0.1`, không expose ra ngoài mạng.
+- Magic Number chỉ là **giá trị gắn vào lệnh mới mở** qua bridge - EA vẫn
+  hiển thị/quản lý **tất cả** vị thế trên tài khoản (kể cả lệnh tay hoặc
+  của EA khác), không tự lọc theo magic. Nếu cần chỉ quản lý lệnh của
+  chính bridge, lọc thêm theo field `magic` ở phía Python/UI.
 - `close_by_threshold` là hành động kiểm tra 1 lần khi bấm nút, không phải
   watcher tự động chạy nền theo dõi ngưỡng liên tục.
 - `deal_closed`/`trades.db` chỉ có dữ liệu **từ lúc EA bắt đầu kết nối trở
@@ -178,6 +233,9 @@ nút + hàm `fetch()` trong `static/index.html`.
   làm, vì có thể rất lớn với tài khoản lâu năm).
 - Margin trong `tools/fake_ea.py` là số giả lập đơn giản (không tính theo
   đòn bẩy/giá thực) — chỉ để test UI, không phản ánh margin thật.
+- `get_history`/`CopyRates` chạy đồng bộ trong `OnTimer` của EA - `count`
+  quá lớn (chục nghìn bar trở lên) có thể làm timer bị chậm 1 nhịp. Với vài
+  nghìn bar mỗi lần gọi (như cấu hình mặc định) thì không đáng lo.
 
 ## Ý tưởng mở rộng thêm (chưa làm)
 
