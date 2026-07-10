@@ -581,15 +581,16 @@
             </label>
             <button class="secondary" onclick="saveTelegram()">Lưu</button>
             <button class="secondary" onclick="testTelegram()">Test</button>
+            <button type="button" class="danger" id="telegramDisconnectBtn" onclick="disconnectTelegram()" style="display:none">Gỡ Telegram</button>
           </div>
           <div class="tab-hint" id="telegramStatus"></div>
         </div>
         <div class="tab-section">
           <div class="tab-section-title">Lệnh điều khiển qua chat</div>
-          <p class="tab-hint" style="margin-top:0">Gửi tin nhắn cho bot: <b>BUY</b> · <b>SELL</b> · <b>HOLD</b> (đóng hết lệnh)</p>
+          <p class="tab-hint" style="margin-top:0" id="telegramCmdHint">3 nút trên chat: XAUUSD BUY · XAUUSD - SELL · CLOSE ALL</p>
           <div class="tab-row" style="margin-top:10px">
             <label class="tab-field">
-              <span>Symbol mặc định (BUY/SELL)</span>
+              <span>Symbol (nhãn nút BUY/SELL)</span>
               <input id="telegramTradeSymbol" type="text" placeholder="XAUUSD" style="width:120px" />
             </label>
             <label class="tab-field">
@@ -1308,6 +1309,14 @@ async function saveMagic() {
   } catch (e) { toast(e.message, true); }
 }
 
+async function updateTelegramCmdHint() {
+  const sym = (document.getElementById('telegramTradeSymbol')?.value || 'XAUUSD').trim().toUpperCase() || 'XAUUSD';
+  const el = document.getElementById('telegramCmdHint');
+  if (el) {
+    el.textContent = `3 nút trên chat: ${sym} BUY · ${sym} - SELL · CLOSE ALL`;
+  }
+}
+
 async function loadTelegramStatus() {
   const accountId = currentAccountId;
   try {
@@ -1315,12 +1324,15 @@ async function loadTelegramStatus() {
     if (accountId !== currentAccountId) return;
     document.getElementById('telegramStatus').textContent =
       data.configured ? `Đã cấu hình (chat ${data.chat_id})` : 'Chưa cấu hình';
+    document.getElementById('telegramDisconnectBtn').style.display =
+      data.configured ? 'inline-block' : 'none';
     if (data.trade_symbol) {
       document.getElementById('telegramTradeSymbol').value = data.trade_symbol;
     }
     if (data.trade_lot) {
       document.getElementById('telegramTradeLot').value = data.trade_lot;
     }
+    updateTelegramCmdHint();
   } catch (e) { /* best-effort */ }
 }
 
@@ -1349,6 +1361,21 @@ async function testTelegram() {
     toast('Đã gửi tin nhắn test - kiểm tra Telegram');
   } catch (e) { toast(e.message, true); }
 }
+
+async function disconnectTelegram() {
+  if (!confirm('Gỡ kết nối Telegram cho tài khoản này?')) return;
+  try {
+    await api(`/api/${currentAccountId}/telegram`, 'DELETE');
+    document.getElementById('telegramToken').value = '';
+    document.getElementById('telegramChatId').value = '';
+    document.getElementById('telegramTradeSymbol').value = '';
+    document.getElementById('telegramTradeLot').value = '0.01';
+    toast('Đã gỡ Telegram');
+    loadTelegramStatus();
+  } catch (e) { toast(e.message, true); }
+}
+
+document.getElementById('telegramTradeSymbol')?.addEventListener('input', updateTelegramCmdHint);
 
 function connectAccountWs() {
   const accountId = currentAccountId;

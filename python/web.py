@@ -456,7 +456,30 @@ def create_app(sessions: SessionManager) -> FastAPI:
             trade_symbol=symbol or None,
             trade_lot=lot,
         )
+        try:
+            await telegram_notify.setup_trade_keyboard(
+                req.bot_token.strip(),
+                req.chat_id.strip(),
+                symbol or "XAUUSD",
+            )
+        except Exception as exc:
+            raise HTTPException(400, f"Đã lưu nhưng gửi bàn phím Telegram thất bại: {exc}")
         return {"ok": True}
+
+    @protected.delete("/api/{account_id}/telegram")
+    async def delete_telegram(account_id: str, request: Request):
+        require_account_access(request, account_id)
+        config = db.get_telegram_config(account_id)
+        if config is None:
+            return {"ok": True, "removed": False}
+        try:
+            await telegram_notify.remove_trade_keyboard(
+                config["bot_token"], config["chat_id"]
+            )
+        except Exception:
+            pass
+        removed = db.clear_telegram_config(account_id)
+        return {"ok": True, "removed": removed}
 
     @protected.post("/api/{account_id}/telegram/test")
     async def test_telegram(account_id: str, request: Request):
@@ -465,7 +488,11 @@ def create_app(sessions: SessionManager) -> FastAPI:
         if config is None:
             raise HTTPException(400, "Chưa cấu hình Telegram cho tài khoản này")
         try:
-            await telegram_notify.send_test(config["bot_token"], config["chat_id"])
+            await telegram_notify.send_test(
+                config["bot_token"],
+                config["chat_id"],
+                config.get("trade_symbol") or "XAUUSD",
+            )
         except Exception as exc:
             raise HTTPException(400, f"Gửi thất bại: {exc}")
         return {"ok": True}

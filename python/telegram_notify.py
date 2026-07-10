@@ -75,13 +75,41 @@ def format_account_connected(account_id: str, broker: str) -> str:
     ])
 
 
-def _send_sync(bot_token: str, chat_id: str, text: str) -> None:
+def _send_sync(
+    bot_token: str,
+    chat_id: str,
+    text: str,
+    reply_markup: dict | None = None,
+) -> None:
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    body = json.dumps({"chat_id": chat_id, "text": text}).encode()
+    payload: dict = {"chat_id": chat_id, "text": text}
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(req, timeout=API_TIMEOUT_S) as resp:
         if resp.status != 200:
             raise urllib.error.HTTPError(url, resp.status, "non-200 from Telegram", resp.headers, None)
+
+
+def trade_keyboard_markup(symbol: str) -> dict:
+    sym = (symbol or "XAUUSD").strip().upper()
+    return {
+        "keyboard": [
+            [{"text": f"{sym} BUY"}, {"text": f"{sym} - SELL"}],
+            [{"text": "CLOSE ALL"}],
+        ],
+        "resize_keyboard": True,
+    }
+
+
+def remove_keyboard_markup() -> dict:
+    return {"remove_keyboard": True}
+
+
+def trade_command_hint(symbol: str) -> str:
+    sym = (symbol or "XAUUSD").strip().upper()
+    return f"{sym} BUY · {sym} - SELL · CLOSE ALL"
 
 
 async def notify(account_id: str, text: str) -> None:
@@ -96,22 +124,50 @@ async def notify(account_id: str, text: str) -> None:
         logger.exception("failed to send Telegram notification for account %s", account_id)
 
 
-async def send_reply(bot_token: str, chat_id: str, text: str) -> None:
+async def send_reply(
+    bot_token: str,
+    chat_id: str,
+    text: str,
+    reply_markup: dict | None = None,
+) -> None:
     """Send a message to a chat; raises on failure (for command replies)."""
-    await asyncio.to_thread(_send_sync, bot_token, chat_id, text)
+    await asyncio.to_thread(_send_sync, bot_token, chat_id, text, reply_markup)
 
 
-async def send_test(bot_token: str, chat_id: str) -> None:
+async def setup_trade_keyboard(bot_token: str, chat_id: str, symbol: str) -> None:
+    sym = (symbol or "XAUUSD").strip().upper()
+    text = "\n".join([
+        "⌨️ Bàn phím lệnh",
+        trade_command_hint(sym),
+        "Chạm nút hoặc gõ lệnh để giao dịch",
+    ])
+    await asyncio.to_thread(
+        _send_sync, bot_token, chat_id, text, trade_keyboard_markup(sym)
+    )
+
+
+async def remove_trade_keyboard(bot_token: str, chat_id: str) -> None:
+    await asyncio.to_thread(
+        _send_sync,
+        bot_token,
+        chat_id,
+        "Đã gỡ kết nối Telegram với tài khoản này.",
+        remove_keyboard_markup(),
+    )
+
+
+async def send_test(bot_token: str, chat_id: str, symbol: str = "XAUUSD") -> None:
     """Used by the "Test" button - raises on failure so the caller can
     report a clear error, unlike notify() which is always silent."""
+    sym = (symbol or "XAUUSD").strip().upper()
     text = "\n".join([
         "🔔 Test thông báo",
         "MetaTrader Dashboard",
         "Kết nối Telegram thành công ✅",
         "",
         "Lệnh điều khiển:",
-        "BUY — vào lệnh mua",
-        "SELL — vào lệnh bán",
-        "HOLD — đóng hết lệnh",
+        trade_command_hint(sym),
     ])
-    await asyncio.to_thread(_send_sync, bot_token, chat_id, text)
+    await asyncio.to_thread(
+        _send_sync, bot_token, chat_id, text, trade_keyboard_markup(sym)
+    )

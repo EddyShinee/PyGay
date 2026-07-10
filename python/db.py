@@ -232,3 +232,24 @@ def set_telegram_config(
     )
     conn.commit()
     conn.close()
+
+
+def clear_telegram_config(account_id: str, db_path: Path = DB_PATH) -> bool:
+    conn = get_connection(db_path)
+    cur = conn.execute(
+        """
+        UPDATE account_settings
+        SET telegram_bot_token = NULL,
+            telegram_chat_id = NULL,
+            telegram_trade_symbol = NULL,
+            telegram_trade_lot = NULL
+        WHERE account_id = ?
+          AND telegram_bot_token IS NOT NULL
+          AND telegram_bot_token != ''
+        """,
+        (account_id,),
+    )
+    conn.commit()
+    changed = cur.rowcount > 0
+    conn.close()
+    return changed
