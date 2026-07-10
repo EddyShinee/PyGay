@@ -21,7 +21,7 @@
     --red: #ef4444;
     --red-soft: rgba(239, 68, 68, 0.14);
     --series-buy: #3b82f6;
-    --series-sell: #f97316;
+    --series-sell: #ef4444;
     --radius: 12px;
     --radius-sm: 8px;
     --shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
@@ -70,6 +70,78 @@
     margin-bottom: 20px;
   }
   .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+  /* Control panel tabs */
+  .tab-bar {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 20px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .tab-btn {
+    background: transparent;
+    color: var(--muted);
+    border: none;
+    box-shadow: none;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 500;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: color .15s, background .15s;
+  }
+  .tab-btn:hover:not(:disabled) { color: var(--text); background: rgba(255,255,255,.04); transform: none; filter: none; }
+  .tab-btn.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border: 1px solid rgba(59, 130, 246, 0.25);
+  }
+  .control-tab-panel { display: none; }
+  .control-tab-panel.active { display: block; }
+  .tab-section { margin-bottom: 16px; }
+  .tab-section:last-child { margin-bottom: 0; }
+  .tab-section-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 10px;
+  }
+  .tab-fields {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: flex-end;
+  }
+  .tab-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: flex-end;
+  }
+  .tab-inline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+  .tab-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+  .tab-field span { font-size: 12px; color: var(--muted); }
+  .tab-hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .tab-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+  .tab-actions.danger-zone { margin-top: 4px; }
   button {
     background: linear-gradient(180deg, #4d94ff 0%, var(--accent) 100%);
     color: #fff;
@@ -90,7 +162,7 @@
   }
   button.danger { background: linear-gradient(180deg, #f87171 0%, var(--red) 100%); border-color: rgba(255,255,255,.06); }
   button.buy-btn { background: linear-gradient(180deg, #60a5fa 0%, var(--series-buy) 100%); font-weight: 600; padding: 7px 20px; }
-  button.sell-btn { background: linear-gradient(180deg, #fb923c 0%, var(--series-sell) 100%); font-weight: 600; padding: 7px 20px; }
+  button.sell-btn { background: linear-gradient(180deg, #f87171 0%, var(--series-sell) 100%); font-weight: 600; padding: 7px 20px; }
   button.ghost { background: transparent; border: 1px solid var(--border-strong); color: var(--text); box-shadow: none; }
   button:hover:not(:disabled) { filter: brightness(1.06); transform: translateY(-1px); }
   button:active:not(:disabled) { transform: translateY(0); }
@@ -409,41 +481,88 @@
       </div>
     </div>
 
-    <div class="panel">
-      <div class="toolbar" style="margin-bottom:10px">
-        <label style="font-size:12px;color:var(--muted)">Lệnh nhanh</label>
-        <select id="q_symbol" style="width:110px"></select>
-        <input id="q_lot" type="number" step="0.01" min="0.01" value="0.01" style="width:80px" placeholder="Lot" />
-        <button class="buy-btn needs-connection" onclick="quickOrder('BUY')">BUY</button>
-        <button class="sell-btn needs-connection" onclick="quickOrder('SELL')">SELL</button>
-        <span style="flex:1"></span>
-        <label style="font-size:12px;color:var(--muted)">Magic Number</label>
-        <input id="magicInput" type="number" step="1" style="width:110px" />
-        <button class="secondary needs-connection" onclick="saveMagic()">Lưu</button>
-        <span id="magicCurrent" style="font-size:12px;color:var(--muted)"></span>
+    <div class="panel control-panel">
+      <div class="tab-bar">
+        <button type="button" class="tab-btn control-tab-btn" data-tab="general" onclick="switchControlTab('general')">Chung</button>
+        <button type="button" class="tab-btn control-tab-btn active" data-tab="trade" onclick="switchControlTab('trade')">Giao dịch</button>
+        <button type="button" class="tab-btn control-tab-btn" data-tab="telegram" onclick="switchControlTab('telegram')">Telegram</button>
       </div>
-      <div class="toolbar" style="margin-bottom:10px">
-        <label style="font-size:12px;color:var(--muted)">Telegram: Bot Token</label>
-        <input id="telegramToken" type="password" style="width:180px" placeholder="123456:ABC-DEF..." />
-        <label style="font-size:12px;color:var(--muted)">Chat ID</label>
-        <input id="telegramChatId" type="text" style="width:120px" placeholder="123456789" />
-        <button class="secondary" onclick="saveTelegram()">Lưu</button>
-        <button class="secondary" onclick="testTelegram()">Test</button>
-        <span id="telegramStatus" style="font-size:12px;color:var(--muted)"></span>
+
+      <div class="control-tab-panel" data-tab="general">
+        <div class="tab-section">
+          <div class="tab-section-title">Magic Number</div>
+          <div class="tab-row">
+            <label class="tab-field">
+              <span>Magic Number</span>
+              <input id="magicInput" type="number" step="1" style="width:180px" />
+            </label>
+            <button class="secondary needs-connection" onclick="saveMagic()">Lưu</button>
+          </div>
+          <div class="tab-hint" id="magicCurrent"></div>
+        </div>
       </div>
-      <div class="toolbar">
-        <button class="needs-connection" onclick="openOrderModal()">+ Thêm lệnh</button>
-        <button class="secondary needs-connection" onclick="refreshPositions()">Làm mới</button>
-        <span style="flex:1"></span>
-        <button class="secondary needs-connection" onclick="closeAll('profit')">Đóng tất cả lệnh lãi</button>
-        <button class="secondary needs-connection" onclick="closeAll('loss')">Đóng tất cả lệnh lỗ</button>
-        <button class="danger needs-connection" onclick="closeAll('all')">Đóng tất cả</button>
+
+      <div class="control-tab-panel active" data-tab="trade">
+        <div class="tab-section">
+          <div class="tab-section-title">Lệnh nhanh</div>
+          <div class="tab-row">
+            <label class="tab-field">
+              <span>Symbol</span>
+              <select id="q_symbol" style="width:110px"></select>
+            </label>
+            <label class="tab-field">
+              <span>Lot</span>
+              <input id="q_lot" type="number" step="0.01" min="0.01" value="0.01" style="width:80px" />
+            </label>
+            <button class="buy-btn needs-connection" onclick="quickOrder('BUY')">BUY</button>
+            <button class="sell-btn needs-connection" onclick="quickOrder('SELL')">SELL</button>
+          </div>
+        </div>
+        <div class="tab-section">
+          <div class="tab-section-title">Quản lý</div>
+          <div class="tab-actions">
+            <button class="needs-connection" onclick="openOrderModal()">+ Thêm lệnh</button>
+            <button class="secondary needs-connection" onclick="refreshPositions()">Làm mới</button>
+          </div>
+        </div>
+        <div class="tab-section">
+          <div class="tab-section-title">Đóng hàng loạt</div>
+          <div class="tab-actions danger-zone">
+            <button class="secondary needs-connection" onclick="closeAll('profit')">Đóng tất cả lệnh lãi</button>
+            <button class="secondary needs-connection" onclick="closeAll('loss')">Đóng tất cả lệnh lỗ</button>
+            <button class="danger needs-connection" onclick="closeAll('all')">Đóng tất cả</button>
+          </div>
+        </div>
+        <div class="tab-section">
+          <div class="tab-section-title">Điều kiện tự động</div>
+          <label class="tab-field">
+            <span>Đóng tất cả khi tổng lãi/lỗ</span>
+            <div class="tab-inline">
+              <select id="thresholdOp" style="width:58px"><option value=">=">&ge;</option><option value="<=">&le;</option></select>
+              <input id="thresholdAmount" type="number" step="0.01" placeholder="USD" style="width:100px" />
+              <button class="secondary needs-connection" onclick="closeByThreshold()">Kiểm tra &amp; đóng</button>
+            </div>
+          </label>
+        </div>
       </div>
-      <div class="toolbar" style="margin-top:10px">
-        <label style="font-size:12px;color:var(--muted)">Đóng tất cả khi tổng lãi/lỗ</label>
-        <select id="thresholdOp"><option value=">=">&ge;</option><option value="<=">&le;</option></select>
-        <input id="thresholdAmount" type="number" step="0.01" placeholder="USD" style="width:100px" />
-        <button class="secondary needs-connection" onclick="closeByThreshold()">Kiểm tra &amp; đóng</button>
+
+      <div class="control-tab-panel" data-tab="telegram">
+        <div class="tab-section">
+          <div class="tab-section-title">Cấu hình thông báo</div>
+          <div class="tab-row">
+            <label class="tab-field">
+              <span>Bot Token</span>
+              <input id="telegramToken" type="password" placeholder="123456:ABC-DEF..." style="width:240px" />
+            </label>
+            <label class="tab-field">
+              <span>Chat ID</span>
+              <input id="telegramChatId" type="text" placeholder="123456789" style="width:130px" />
+            </label>
+            <button class="secondary" onclick="saveTelegram()">Lưu</button>
+            <button class="secondary" onclick="testTelegram()">Test</button>
+          </div>
+          <div class="tab-hint" id="telegramStatus"></div>
+        </div>
       </div>
     </div>
 
@@ -603,6 +722,15 @@ function toast(msg, isError) {
   toast._t = setTimeout(() => el.classList.remove('show'), 4000);
 }
 
+function switchControlTab(tab) {
+  document.querySelectorAll('.control-tab-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === tab);
+  });
+  document.querySelectorAll('.control-tab-panel').forEach(panel => {
+    panel.classList.toggle('active', panel.dataset.tab === tab);
+  });
+}
+
 async function api(path, method, body) {
   const res = await fetch(path, {
     method,
@@ -663,6 +791,7 @@ function showAccount(accountId) {
   currentAccountConnected = !!(a && a.connected);
   document.getElementById('overviewView').style.display = 'none';
   document.getElementById('detailView').style.display = 'block';
+  switchControlTab('trade');
   closeDetailSockets();
   if (currentAccountConnected) {
     connectPositionsWs();
