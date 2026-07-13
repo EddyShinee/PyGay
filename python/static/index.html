@@ -1906,32 +1906,47 @@ function updateEntryTriggerFields() {
 
 // Meta MUST stay in sync with python/indicators.py INDICATOR_DEFAULTS.
 const ENTRY_INDICATORS = [
-  {key:'rsi', label:'RSI', fields:[['period','Period',14],['oversold','Quá bán',30],['overbought','Quá mua',70]]},
-  {key:'macd', label:'MACD', fields:[['fast','EMA nhanh',12],['slow','EMA chậm',26],['signal','Signal',9]]},
-  {key:'sma_cross', label:'SMA Cross', fields:[['fast','SMA nhanh',10],['slow','SMA chậm',30]]},
-  {key:'ema_cross', label:'EMA Cross', fields:[['fast','EMA nhanh',12],['slow','EMA chậm',26]]},
-  {key:'bollinger', label:'Bollinger Bands', fields:[['period','Period',20],['stddev','Độ lệch chuẩn',2]]},
-  {key:'stochastic', label:'Stochastic', fields:[['k_period','%K period',14],['oversold','Quá bán',20],['overbought','Quá mua',80]]},
-  {key:'cci', label:'CCI', fields:[['period','Period',20],['threshold','Ngưỡng',100]]},
-  {key:'momentum', label:'Momentum (ROC%)', fields:[['period','Period',10],['threshold','Ngưỡng %',0.1]]},
-  {key:'williams', label:'Williams %R', fields:[['period','Period',14],['oversold','Quá bán',-80],['overbought','Quá mua',-20]]},
-  {key:'adx', label:'ADX (+DI/-DI)', fields:[['period','Period',14],['threshold','Ngưỡng ADX',25]]},
+  {key:'rsi', label:'RSI', group:'Dao động & xu hướng', fields:[['period','Period',14],['oversold','Quá bán',30],['overbought','Quá mua',70]]},
+  {key:'macd', label:'MACD', group:'Dao động & xu hướng', fields:[['fast','EMA nhanh',12],['slow','EMA chậm',26],['signal','Signal',9]]},
+  {key:'sma_cross', label:'SMA Cross', group:'Dao động & xu hướng', fields:[['fast','SMA nhanh',10],['slow','SMA chậm',30]]},
+  {key:'ema_cross', label:'EMA Cross', group:'Dao động & xu hướng', fields:[['fast','EMA nhanh',12],['slow','EMA chậm',26]]},
+  {key:'bollinger', label:'Bollinger Bands', group:'Dao động & xu hướng', fields:[['period','Period',20],['stddev','Độ lệch chuẩn',2]]},
+  {key:'stochastic', label:'Stochastic', group:'Dao động & xu hướng', fields:[['k_period','%K period',14],['oversold','Quá bán',20],['overbought','Quá mua',80]]},
+  {key:'cci', label:'CCI', group:'Dao động & xu hướng', fields:[['period','Period',20],['threshold','Ngưỡng',100]]},
+  {key:'momentum', label:'Momentum (ROC%)', group:'Dao động & xu hướng', fields:[['period','Period',10],['threshold','Ngưỡng %',0.1]]},
+  {key:'williams', label:'Williams %R', group:'Dao động & xu hướng', fields:[['period','Period',14],['oversold','Quá bán',-80],['overbought','Quá mua',-20]]},
+  {key:'adx', label:'ADX (+DI/-DI)', group:'Dao động & xu hướng', fields:[['period','Period',14],['threshold','Ngưỡng ADX',25]]},
+  {key:'heikin_ashi', label:'Heikin Ashi', group:'Nến Nhật (Candlestick)', fields:[['trend_bars','Số nến cùng màu',2]]},
+  {key:'engulfing', label:'Engulfing (Nến nhấn chìm)', group:'Nến Nhật (Candlestick)', fields:[]},
+  {key:'hammer', label:'Hammer / Shooting Star', group:'Nến Nhật (Candlestick)', fields:[['wick_ratio','Tỷ lệ bóng/thân',2]]},
+  {key:'three_soldiers', label:'Three Soldiers / Crows', group:'Nến Nhật (Candlestick)', fields:[]},
+  {key:'marubozu', label:'Marubozu', group:'Nến Nhật (Candlestick)', fields:[['body_ratio','Tỷ lệ thân/biên độ',0.9]]},
 ];
 
 function renderEntryIndicators() {
   const box = document.getElementById('entryIndicatorList');
   if (!box) return;
-  box.innerHTML = ENTRY_INDICATORS.map(ind => `
+  let html = '';
+  let lastGroup = null;
+  for (const ind of ENTRY_INDICATORS) {
+    if (ind.group !== lastGroup) {
+      lastGroup = ind.group;
+      html += `<div class="tab-section-title" style="margin-top:12px">${ind.group}</div>`;
+    }
+    const fieldsHtml = ind.fields.length
+      ? `<div class="tab-row">${ind.fields.map(f => `<label class="tab-field"><span>${f[1]}</span><input id="ind_${ind.key}_${f[0]}" type="number" step="any" value="${f[2]}" /></label>`).join('')}</div>`
+      : `<span class="tab-hint">Mẫu nến — không có tham số</span>`;
+    html += `
     <div class="tab-section" style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px">
       <label class="tab-field" style="flex-direction:row;align-items:center;gap:8px;margin-bottom:6px">
         <input type="checkbox" id="ind_${ind.key}_enabled" />
         <span style="font-weight:600">${ind.label}</span>
         <span id="ind_${ind.key}_sig" class="tab-hint" style="margin:0 0 0 auto"></span>
       </label>
-      <div class="tab-row">
-        ${ind.fields.map(f => `<label class="tab-field"><span>${f[1]}</span><input id="ind_${ind.key}_${f[0]}" type="number" step="any" value="${f[2]}" /></label>`).join('')}
-      </div>
-    </div>`).join('');
+      ${fieldsHtml}
+    </div>`;
+  }
+  box.innerHTML = html;
 }
 
 function collectEntryIndicators() {

@@ -23,6 +23,12 @@ INDICATOR_DEFAULTS: dict[str, dict] = {
     "momentum": {"period": 10, "threshold": 0.1},
     "williams": {"period": 14, "oversold": -80, "overbought": -20},
     "adx": {"period": 14, "threshold": 25},
+    # --- Japanese candlestick group ---
+    "heikin_ashi": {"trend_bars": 2},
+    "engulfing": {},
+    "hammer": {"wick_ratio": 2.0},
+    "three_soldiers": {},
+    "marubozu": {"body_ratio": 0.9},
 }
 
 INDICATOR_KEYS = list(INDICATOR_DEFAULTS.keys())
@@ -316,6 +322,128 @@ def sig_adx(bars: list[dict], p: dict) -> Optional[str]:
     return "BUY" if pdi > mdi else "SELL"
 
 
+# --------------------------------------------------------------------------
+# Japanese candlestick indicators
+# --------------------------------------------------------------------------
+
+def _ohlc(b: dict) -> tuple[float, float, float, float]:
+    return float(b["open"]), float(b["high"]), float(b["low"]), float(b["close"])
+
+
+def _body(b: dict) -> float:
+    o, _, _, c = _ohlc(b)
+    return abs(c - o)
+
+
+def _upper_wick(b: dict) -> float:
+    o, h, _, c = _ohlc(b)
+    return h - max(o, c)
+
+
+def _lower_wick(b: dict) -> float:
+    o, _, l, c = _ohlc(b)
+    return min(o, c) - l
+
+
+def _heikin_ashi(bars: list[dict]) -> list[dict]:
+    """Return Heikin-Ashi OHLC series computed from raw bars."""
+    ha: list[dict] = []
+    for i, b in enumerate(bars):
+        o, h, l, c = _ohlc(b)
+        ha_close = (o + h + l + c) / 4
+        if i == 0:
+            ha_open = (o + c) / 2
+        else:
+            ha_open = (ha[i - 1]["open"] + ha[i - 1]["close"]) / 2
+        ha.append({
+            "open": ha_open,
+            "high": max(h, ha_open, ha_close),
+            "low": min(l, ha_open, ha_close),
+            "close": ha_close,
+        })
+    return ha
+
+
+def sig_heikin_ashi(bars: list[dict], p: dict) -> Optional[str]:
+    trend = max(1, int(p.get("trend_bars", 2)))
+    if len(bars) < trend + 1:
+        return None
+    ha = _heikin_ashi(bars)
+    last = ha[-trend:]
+    if all(c["close"] > c["open"] for c in last):
+        return "BUY"
+    if all(c["close"] < c["open"] for c in last):
+        return "SELL"
+    return None
+
+
+def sig_engulfing(bars: list[dict], p: dict) -> Optional[str]:
+    if len(bars) < 2:
+        return None
+    po, ph, pl, pc = _ohlc(bars[-2])
+    o, h, l, c = _ohlc(bars[-1])
+    prev_bear = pc < po
+    prev_bull = pc > po
+    cur_bull = c > o
+    cur_bear = c < o
+    if cur_bull and prev_bear and o <= pc and c >= po:
+        return "BUY"
+    if cur_bear and prev_bull and o >= pc and c <= po:
+        return "SELL"
+    return None
+
+
+def sig_hammer(bars: list[dict], p: dict) -> Optional[str]:
+    ratio = float(p.get("wick_ratio", 2.0))
+    if len(bars) < 1:
+        return None
+    b = bars[-1]
+    body = _body(b)
+    if body <= 0:
+        return None
+    up = _upper_wick(b)
+    lo = _lower_wick(b)
+    # Hammer: long lower wick, small upper wick -> bullish reversal
+    if lo >= ratio * body and up <= body:
+        return "BUY"
+    # Shooting star: long upper wick, small lower wick -> bearish reversal
+    if up >= ratio * body and lo <= body:
+        return "SELL"
+    return None
+
+
+def sig_three_soldiers(bars: list[dict], p: dict) -> Optional[str]:
+    if len(bars) < 3:
+        return None
+    c3 = bars[-3:]
+    o = [float(b["open"]) for b in c3]
+    c = [float(b["close"]) for b in c3]
+    bull = all(c[i] > o[i] for i in range(3)) and c[0] < c[1] < c[2]
+    bear = all(c[i] < o[i] for i in range(3)) and c[0] > c[1] > c[2]
+    if bull:
+        return "BUY"
+    if bear:
+        return "SELL"
+    return None
+
+
+def sig_marubozu(bars: list[dict], p: dict) -> Optional[str]:
+    body_ratio = float(p.get("body_ratio", 0.9))
+    if len(bars) < 1:
+        return None
+    o, h, l, c = _ohlc(bars[-1])
+    rng = h - l
+    if rng <= 0:
+        return None
+    if _body(bars[-1]) / rng < body_ratio:
+        return None
+    if c > o:
+        return "BUY"
+    if c < o:
+        return "SELL"
+    return None
+
+
 _DISPATCH: dict[str, Callable[[list[dict], dict], Optional[str]]] = {
     "rsi": sig_rsi,
     "macd": sig_macd,
@@ -327,6 +455,11 @@ _DISPATCH: dict[str, Callable[[list[dict], dict], Optional[str]]] = {
     "momentum": sig_momentum,
     "williams": sig_williams,
     "adx": sig_adx,
+    "heikin_ashi": sig_heikin_ashi,
+    "engulfing": sig_engulfing,
+    "hammer": sig_hammer,
+    "three_soldiers": sig_three_soldiers,
+    "marubozu": sig_marubozu,
 }
 
 
