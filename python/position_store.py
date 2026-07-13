@@ -33,6 +33,13 @@ class PositionStore:
     def total_profit(self) -> float:
         return sum(p.profit + p.swap for p in self._positions.values())
 
+    def totals_by_symbol(self) -> dict[str, float]:
+        """Net floating P/L (profit + swap) grouped by symbol."""
+        totals: dict[str, float] = {}
+        for p in self._positions.values():
+            totals[p.symbol] = totals.get(p.symbol, 0.0) + p.profit + p.swap
+        return totals
+
     def get(self, ticket: int) -> Optional[Position]:
         return self._positions.get(ticket)
 

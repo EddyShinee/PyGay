@@ -72,17 +72,17 @@ class TradeGateway:
             self._pending.pop(req_id, None)
 
     async def open_order(self, symbol: str, side: str, volume: float,
-                          sl: float = 0.0, tp: float = 0.0) -> dict:
+                          sl: float = 0.0, tp: float = 0.0, comment: str = "") -> dict:
         return await self._send({
             "type": "open_order", "symbol": symbol, "side": side,
-            "volume": volume, "sl": sl, "tp": tp,
+            "volume": volume, "sl": sl, "tp": tp, "comment": comment,
         })
 
     async def close_position(self, ticket: int) -> dict:
         return await self._send({"type": "close_position", "ticket": ticket})
 
-    async def close_all(self, filter: str = "all") -> dict:
-        return await self._send({"type": "close_all", "filter": filter})
+    async def close_all(self, filter: str = "all", symbol: str = "") -> dict:
+        return await self._send({"type": "close_all", "filter": filter, "symbol": symbol})
 
     async def modify_position(self, ticket: int, sl: float, tp: float) -> dict:
         return await self._send({"type": "modify_position", "ticket": ticket, "sl": sl, "tp": tp})

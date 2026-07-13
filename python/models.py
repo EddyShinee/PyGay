@@ -15,6 +15,7 @@ class Position:
     swap: float
     time_open: int
     magic: int = 0
+    comment: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -33,4 +34,5 @@ class Position:
             swap=float(message.get("swap", 0.0)),
             time_open=int(message.get("time_open", 0)),
             magic=int(message.get("magic", 0)),
+            comment=str(message.get("comment", "") or ""),
         )

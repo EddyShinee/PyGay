@@ -319,7 +319,8 @@ class PositionManager:
                     opp = "SELL" if side == "BUY" else "BUY"
                     lot = _round_lot(min(cfg.max_lot_per_order, m["total_vol"] * cfg.hedge_lot_ratio))
                     reason = f"Hedge {opp} {lot} lot ×{remaining} (rổ {side} lỗ {m['pnl_money']:.2f}$)"
-                    opened = await self._add_order(symbol, opp, lot, reason, count=remaining)
+                    opened = await self._add_order(symbol, opp, lot, reason, count=remaining,
+                                                   algo="Hedge", start_index=st.hedge_count + 1)
                     if opened > 0:
                         st.hedge_count += opened
                         st.hedge_ref = cur
@@ -335,7 +336,7 @@ class PositionManager:
                 lot = min(lot, cfg.max_lot_per_order)
                 if m["total_vol"] + lot <= cfg.max_total_lot:
                     reason = f"DCA #{st.dca_steps + 1} {side} {lot} lot (lỗ, giá đi ngược {-move_points:.0f}pts)"
-                    if await self._add_order(symbol, side, lot, reason):
+                    if await self._add_order(symbol, side, lot, reason, algo="DCA", start_index=st.dca_steps + 1):
                         st.dca_steps += 1
                         st.ref_price = cur
                         st.last_add_ts = now
@@ -349,7 +350,7 @@ class PositionManager:
                 lot = min(lot, cfg.max_lot_per_order)
                 if m["total_vol"] + lot <= cfg.max_total_lot:
                     reason = f"Grid #{st.grid_levels + 1} {side} {lot} lot (bước {cfg.grid_step_points})"
-                    if await self._add_order(symbol, side, lot, reason):
+                    if await self._add_order(symbol, side, lot, reason, algo="Grid", start_index=st.grid_levels + 1):
                         st.grid_levels += 1
                         st.ref_price = cur
                         st.last_add_ts = now
@@ -363,7 +364,7 @@ class PositionManager:
                 lot = min(lot, cfg.max_lot_per_order)
                 if m["total_vol"] + lot <= cfg.max_total_lot:
                     reason = f"Pyramid #{st.pyr_steps + 1} {side} {lot} lot (lời, giá thuận {move_points:.0f}pts)"
-                    if await self._add_order(symbol, side, lot, reason):
+                    if await self._add_order(symbol, side, lot, reason, algo="Pyramid", start_index=st.pyr_steps + 1):
                         st.pyr_steps += 1
                         st.ref_price = cur
                         st.last_add_ts = now
@@ -373,16 +374,21 @@ class PositionManager:
 
         return False
 
-    async def _add_order(self, symbol: str, side: str, lot: float, reason: str, count: int = 1) -> int:
-        """Open `count` orders of the same side; returns how many succeeded."""
+    async def _add_order(self, symbol: str, side: str, lot: float, reason: str,
+                         count: int = 1, algo: str = "", start_index: int = 1) -> int:
+        """Open `count` orders of the same side; returns how many succeeded.
+
+        Each order is tagged with a comment "{algo}-#{n}" so it is traceable in
+        the positions table and in MT4/MT5 history."""
         if lot < MIN_LOT or count < 1:
             return 0
         self._acting = True
         self._last_trigger = f"{symbol} {side}: {reason}"
         opened = 0
         try:
-            for _ in range(count):
-                result = await self._session.gateway.open_order(symbol, side, lot, 0.0, 0.0)
+            for i in range(count):
+                comment = f"{algo}-#{start_index + i}" if algo else ""
+                result = await self._session.gateway.open_order(symbol, side, lot, 0.0, 0.0, comment)
                 if result.get("ok"):
                     opened += 1
                 else:

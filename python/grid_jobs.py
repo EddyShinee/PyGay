@@ -33,6 +33,8 @@ class GridJob:
     tp_points: float
     last_price: float
     last_time: float
+    comment_label: str = "Grid"
+    next_index: int = 2     # order #1 placed in start_job; follow-ups start at #2
 
 
 def scaled_lot(lot: float, mode: str, value: float) -> float:
@@ -65,10 +67,11 @@ class GridJobManager:
     async def start_job(self, *, symbol: str, side: str, volume: float,
                          sl_points: float, tp_points: float, count: int,
                          spacing_points: float, direction: str, delay_seconds: float,
-                         lot_mode: str, lot_value: float, price: float, point: float) -> dict:
+                         lot_mode: str, lot_value: float, price: float, point: float,
+                         comment_label: str = "Grid") -> dict:
         """Place order #1 immediately; register a job for the rest, if any."""
         sl, tp = sl_tp_from_points(side, price, sl_points, tp_points, point)
-        result = await self.gateway.open_order(symbol, side, volume, sl, tp)
+        result = await self.gateway.open_order(symbol, side, volume, sl, tp, f"{comment_label}-#1")
         if not result.get("ok"):
             return result
 
@@ -81,6 +84,7 @@ class GridJobManager:
                 spacing_points=spacing_points, direction=direction,
                 delay_seconds=delay_seconds, sl_points=sl_points, tp_points=tp_points,
                 last_price=price, last_time=time.monotonic(),
+                comment_label=comment_label,
             ))
         return result
 
@@ -98,13 +102,16 @@ class GridJobManager:
                 continue
 
             sl, tp = sl_tp_from_points(job.side, price, job.sl_points, job.tp_points, point)
-            result = await self.gateway.open_order(job.symbol, job.side, job.next_lot, sl, tp)
+            result = await self.gateway.open_order(
+                job.symbol, job.side, job.next_lot, sl, tp, f"{job.comment_label}-#{job.next_index}"
+            )
             if not result.get("ok"):
                 logger.warning("grid job %s order failed (%s) - stopping job", job.job_id, result.get("error"))
                 self._jobs.remove(job)
                 continue
 
             job.remaining -= 1
+            job.next_index += 1
             job.last_price = price
             job.last_time = now
             job.next_lot = scaled_lot(job.next_lot, job.lot_mode, job.lot_value)

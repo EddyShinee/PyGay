@@ -766,12 +766,13 @@
         <div class="tab-section">
           <div class="tab-section-title">Điều kiện tự động</div>
           <label class="tab-field">
-            <span>Đóng tất cả khi tổng lãi/lỗ</span>
+            <span>Đóng theo từng symbol khi lãi/lỗ của symbol đó</span>
             <div class="tab-inline">
               <select id="thresholdOp" style="width:58px"><option value=">=">&ge;</option><option value="<=">&le;</option></select>
               <input id="thresholdAmount" type="number" step="0.01" placeholder="USD" style="width:100px" />
               <button class="secondary needs-connection" onclick="withButtonLoading(this, closeByThreshold)">Kiểm tra &amp; đóng</button>
             </div>
+            <p class="tab-hint" style="margin-top:4px">Xét riêng P/L của từng symbol (không phải tổng). Symbol nào đạt ngưỡng sẽ đóng toàn bộ lệnh của symbol đó.</p>
           </label>
         </div>
       </div>
@@ -1196,6 +1197,7 @@
               <th class="sortable" onclick="setSort('price_open')">Giá vào<span class="sort-arrow" id="sort_price_open"></span></th>
               <th class="sortable" onclick="setSort('time_open')">Thời gian<span class="sort-arrow" id="sort_time_open"></span></th>
               <th>SL</th><th>TP</th>
+              <th>Magic</th><th>Comment</th>
               <th class="sortable" onclick="setSort('profit')">Profit<span class="sort-arrow" id="sort_profit"></span></th>
               <th>Thao tác</th>
             </tr>
@@ -1444,6 +1446,12 @@ async function logout() {
 
 function fmt(n, digits) {
   return Number(n || 0).toFixed(digits === undefined ? 2 : digits);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
+  ));
 }
 
 function fmtTime(ts) {
@@ -1820,6 +1828,8 @@ function renderPositions() {
       <td data-label="Thời gian">${fmtTime(p.time_open)}</td>
       <td data-label="SL">${fmt(p.sl, 5)}</td>
       <td data-label="TP">${fmt(p.tp, 5)}</td>
+      <td data-label="Magic">${p.magic ?? 0}</td>
+      <td data-label="Comment">${p.comment ? escapeHtml(p.comment) : '—'}</td>
       <td data-label="Profit" class="${p.profit >= 0 ? 'profit-pos' : 'profit-neg'}">${fmt(p.profit + p.swap)}</td>
       <td data-label="Thao tác" class="row-actions">
         <button class="secondary" onclick="openModifyModal(${p.ticket})" ${modifyDis}>${modifyBusy ? '...' : 'Sửa SL/TP'}</button>
@@ -1885,7 +1895,12 @@ async function closeByThreshold() {
   if (isNaN(amount)) { toast('Nhập ngưỡng USD trước', true); return; }
   try {
     const res = await api(`/api/${currentAccountId}/positions/close_by_threshold`, 'POST', {op, amount});
-    toast(res.triggered ? `Đã đóng tất cả (tổng ${fmt(res.total_profit)})` : `Chưa đạt ngưỡng (hiện tại ${fmt(res.total_profit)})`);
+    if (res.triggered) {
+      const syms = (res.closed || []).map(c => `${c.symbol} (${fmt(c.profit)})`).join(', ');
+      toast(`Đã đóng theo symbol: ${syms || '—'}`);
+    } else {
+      toast(`Chưa symbol nào đạt ngưỡng (tổng ${fmt(res.total_profit)})`);
+    }
   } catch (e) { toast(e.message, true); }
 }
 

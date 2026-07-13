@@ -247,7 +247,8 @@ void HandleMessage(CJson &msg)
 //| "signal" path and the manual/web "open_order" path                |
 //+------------------------------------------------------------------+
 bool ExecuteMarketOrder(const string side, const string symbol, const double volume,
-                         const double sl, const double tp, ulong &out_ticket)
+                         const double sl, const double tp, ulong &out_ticket,
+                         const string comment = "")
 {
    // Ensure the symbol is in Market Watch so the terminal has quotes for it;
    // lets us trade any ticker even though the EA sits on one chart.
@@ -255,9 +256,9 @@ bool ExecuteMarketOrder(const string side, const string symbol, const double vol
 
    bool ok;
    if(side == "BUY")
-      ok = g_trade.Buy(volume, symbol, 0.0, sl, tp);
+      ok = g_trade.Buy(volume, symbol, 0.0, sl, tp, comment);
    else if(side == "SELL")
-      ok = g_trade.Sell(volume, symbol, 0.0, sl, tp);
+      ok = g_trade.Sell(volume, symbol, 0.0, sl, tp, comment);
    else
    {
       Print("SocketBridgeEA: unknown side: ", side);
@@ -307,15 +308,16 @@ void HandleSignal(CJson &msg)
 //+------------------------------------------------------------------+
 void HandleOpenOrder(CJson &msg)
 {
-   string id     = msg.GetString("id");
-   string side   = msg.GetString("side");
-   string symbol = msg.GetString("symbol", _Symbol);
-   double volume = msg.GetDouble("volume", 0.01);
-   double sl     = msg.GetDouble("sl", 0.0);
-   double tp     = msg.GetDouble("tp", 0.0);
+   string id      = msg.GetString("id");
+   string side    = msg.GetString("side");
+   string symbol  = msg.GetString("symbol", _Symbol);
+   double volume  = msg.GetDouble("volume", 0.01);
+   double sl      = msg.GetDouble("sl", 0.0);
+   double tp      = msg.GetDouble("tp", 0.0);
+   string comment = msg.GetString("comment", "");
 
    ulong ticket = 0;
-   bool ok = ExecuteMarketOrder(side, symbol, volume, sl, tp, ticket);
+   bool ok = ExecuteMarketOrder(side, symbol, volume, sl, tp, ticket, comment);
    SendOrderResult(id, ok, ticket, ok ? "" : g_trade.ResultRetcodeDescription());
 }
 
@@ -332,6 +334,7 @@ void HandleCloseAll(CJson &msg)
 {
    string id     = msg.GetString("id");
    string filter = msg.GetString("filter", "all");
+   string only_symbol = msg.GetString("symbol", "");
 
    bool   all_ok    = true;
    string last_error = "";
@@ -340,6 +343,9 @@ void HandleCloseAll(CJson &msg)
    {
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0)
+         continue;
+
+      if(only_symbol != "" && PositionGetString(POSITION_SYMBOL) != only_symbol)
          continue;
 
       double profit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
@@ -491,6 +497,7 @@ void SendPositionsSnapshot()
       msg.AddDouble("swap", PositionGetDouble(POSITION_SWAP), 2);
       msg.AddInt("time_open", (long)PositionGetInteger(POSITION_TIME));
       msg.AddInt("magic", (long)PositionGetInteger(POSITION_MAGIC));
+      msg.AddString("comment", PositionGetString(POSITION_COMMENT));
       g_socket.Send(msg.Serialize() + "\n");
    }
 

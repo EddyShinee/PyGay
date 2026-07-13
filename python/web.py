@@ -501,6 +501,7 @@ def create_app(sessions: SessionManager) -> FastAPI:
             spacing_points=req.spacing_points, direction=req.direction,
             delay_seconds=req.delay_seconds, lot_mode=req.lot_mode, lot_value=req.lot_value,
             price=price, point=cached["point"],
+            comment_label="Manual" if req.count <= 1 else "Grid",
         )
         if not result.get("ok"):
             raise HTTPException(400, result.get("error", "order failed"))
@@ -527,15 +528,32 @@ def create_app(sessions: SessionManager) -> FastAPI:
     @protected.post("/api/{account_id}/positions/close_by_threshold")
     async def close_by_threshold(account_id: str, req: CloseByThresholdRequest, request: Request):
         session = get_session(account_id, request)
+        # Evaluate the threshold PER SYMBOL: each symbol's own net floating P/L is
+        # compared to the threshold, and only symbols that meet it are closed.
+        # This avoids one big winner masking losers (or vice versa) in the total.
+        per_symbol = session.store.totals_by_symbol()
         total = session.store.total_profit()
-        triggered = total >= req.amount if req.op == ">=" else total <= req.amount
-        if not triggered:
-            return {"triggered": False, "total_profit": total}
+        triggered_symbols = [
+            {"symbol": sym, "profit": round(pnl, 2)}
+            for sym, pnl in per_symbol.items()
+            if (pnl >= req.amount if req.op == ">=" else pnl <= req.amount)
+        ]
+        if not triggered_symbols:
+            return {
+                "triggered": False,
+                "total_profit": round(total, 2),
+                "per_symbol": [{"symbol": s, "profit": round(p, 2)} for s, p in per_symbol.items()],
+            }
         require_connected(session)
-        result = await session.gateway.close_all("all")
-        result["triggered"] = True
-        result["total_profit"] = total
-        return result
+        results = []
+        for item in triggered_symbols:
+            res = await session.gateway.close_all("all", item["symbol"])
+            results.append({"symbol": item["symbol"], "profit": item["profit"], "ok": bool(res.get("ok")), "error": res.get("error")})
+        return {
+            "triggered": True,
+            "total_profit": round(total, 2),
+            "closed": results,
+        }
 
     @protected.post("/api/{account_id}/positions/{ticket}/modify")
     async def modify_position(account_id: str, ticket: int, req: ModifyRequest, request: Request):

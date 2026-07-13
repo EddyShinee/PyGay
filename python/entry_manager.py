@@ -488,15 +488,17 @@ class EntryManager:
             tp_pts = (cfg.tp_distance or 0) * unit
             sl, tp = sl_tp_from_points(side, price, sl_pts, tp_pts, point)
 
+            today = _utc_today()
+            if self._entries_day != today:
+                self._entries_day = today
+                self._entries_today = 0
+            comment = f"Entry-#{self._entries_today + 1}"
+
             result = await self._session.gateway.open_order(
-                symbol, side, cfg.volume, sl, tp
+                symbol, side, cfg.volume, sl, tp, comment
             )
             if result.get("ok"):
                 st.last_entry_ts = time.monotonic()
-                today = _utc_today()
-                if self._entries_day != today:
-                    self._entries_day = today
-                    self._entries_today = 0
                 self._entries_today += 1
                 logger.info("[%s] entry %s %s %.2f lot: %s", self.account_id, side, symbol, cfg.volume, reason)
                 await telegram_notify.notify(
