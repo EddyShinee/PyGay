@@ -625,6 +625,7 @@
         <button type="button" class="tab-btn control-tab-btn" data-tab="general" onclick="switchControlTab('general')">Chung</button>
         <button type="button" class="tab-btn control-tab-btn active" data-tab="trade" onclick="switchControlTab('trade')">Giao dịch</button>
         <button type="button" class="tab-btn control-tab-btn" data-tab="telegram" onclick="switchControlTab('telegram')">Telegram</button>
+        <button type="button" class="tab-btn control-tab-btn" data-tab="risk" onclick="switchControlTab('risk')">Rủi ro</button>
       </div>
 
       <div class="control-tab-panel" data-tab="general">
@@ -717,6 +718,97 @@
             </label>
           </div>
         </div>
+      </div>
+
+      <div class="control-tab-panel" data-tab="risk">
+        <div class="tab-section">
+          <div class="tab-section-title">Trạng thái RiskManager</div>
+          <p class="tab-hint" style="margin-top:0" id="riskStatusLine">Chưa tải cấu hình</p>
+          <div class="tab-inline" style="margin-top:10px">
+            <label class="tab-field" style="flex-direction:row;align-items:center;gap:8px">
+              <input type="checkbox" id="riskEnabled" />
+              <span>Bật kiểm soát rủi ro cho tài khoản này</span>
+            </label>
+          </div>
+        </div>
+        <div class="tab-section">
+          <div class="tab-section-title">Mức tài khoản</div>
+          <div class="tab-row">
+            <label class="tab-field"><span>TP tổng (USD)</span><input id="riskAccountTpUsd" type="number" step="0.01" placeholder="vd: 100" /></label>
+            <label class="tab-field"><span>SL tổng (USD)</span><input id="riskAccountSlUsd" type="number" step="0.01" placeholder="vd: 50" /></label>
+            <label class="tab-field"><span>TP tổng (% balance)</span><input id="riskAccountTpPct" type="number" step="0.1" placeholder="vd: 5" /></label>
+            <label class="tab-field"><span>SL tổng (% balance)</span><input id="riskAccountSlPct" type="number" step="0.1" placeholder="vd: 3" /></label>
+          </div>
+          <div class="tab-row">
+            <label class="tab-field"><span>Equity sàn</span><input id="riskEquityFloor" type="number" step="0.01" /></label>
+            <label class="tab-field"><span>Equity trần</span><input id="riskEquityCeiling" type="number" step="0.01" /></label>
+            <label class="tab-field"><span>Drawdown max (%)</span><input id="riskMaxDrawdownPct" type="number" step="0.1" /></label>
+            <label class="tab-field"><span>Margin level min (%)</span><input id="riskMinMarginLevel" type="number" step="0.1" /></label>
+          </div>
+          <div class="tab-row">
+            <label class="tab-field"><span>Lãi trong ngày (USD)</span><input id="riskDailyProfit" type="number" step="0.01" /></label>
+            <label class="tab-field"><span>Lỗ trong ngày (USD)</span><input id="riskDailyLoss" type="number" step="0.01" /></label>
+            <label class="tab-field"><span>Hành động khi kích hoạt</span>
+              <select id="riskAccountAction"><option value="all">Đóng tất cả</option><option value="matching">TP→lãi / SL→lỗ</option></select>
+            </label>
+            <label class="tab-field"><span>Cooldown (giây)</span><input id="riskCooldown" type="number" step="1" value="5" /></label>
+          </div>
+          <div class="tab-section-title" style="margin-top:14px">Trailing tài khoản</div>
+          <div class="tab-row">
+            <label class="tab-field"><span>Arm (USD)</span><input id="riskTrailArmUsd" type="number" step="0.01" /></label>
+            <label class="tab-field"><span>Giveback (USD)</span><input id="riskTrailGiveUsd" type="number" step="0.01" /></label>
+            <label class="tab-field"><span>Arm (%)</span><input id="riskTrailArmPct" type="number" step="0.1" /></label>
+            <label class="tab-field"><span>Giveback (%)</span><input id="riskTrailGivePct" type="number" step="0.1" /></label>
+          </div>
+          <div class="tab-section-title" style="margin-top:14px">Phơi nhiễm &amp; thời gian</div>
+          <div class="tab-row">
+            <label class="tab-field"><span>Max lệnh mở</span><input id="riskMaxPositions" type="number" step="1" /></label>
+            <label class="tab-field"><span>Max tổng lot</span><input id="riskMaxLot" type="number" step="0.01" /></label>
+            <label class="tab-field"><span>Giờ đóng (HH:MM)</span><input id="riskCloseTime" type="text" placeholder="22:00" /></label>
+            <label class="tab-field" style="flex-direction:row;align-items:center;gap:8px;padding-top:18px">
+              <input type="checkbox" id="riskCloseWeekend" />
+              <span>Đóng trước cuối tuần (T6 20:00)</span>
+            </label>
+          </div>
+        </div>
+        <div class="tab-section">
+          <div class="tab-section-title">Mức từng lệnh</div>
+          <div class="tab-row">
+            <label class="tab-field"><span>TP lệnh (USD)</span><input id="riskTradeTpUsd" type="number" step="0.01" /></label>
+            <label class="tab-field"><span>SL lệnh (USD)</span><input id="riskTradeSlUsd" type="number" step="0.01" /></label>
+            <label class="tab-field"><span>TP lệnh (pip)</span><input id="riskTradeTpPips" type="number" step="1" /></label>
+            <label class="tab-field"><span>SL lệnh (pip)</span><input id="riskTradeSlPips" type="number" step="1" /></label>
+          </div>
+          <div class="tab-row">
+            <label class="tab-field"><span>Giữ tối đa (phút)</span><input id="riskMaxHold" type="number" step="1" /></label>
+            <label class="tab-field"><span>Break-even arm (pip)</span><input id="riskBeArm" type="number" step="1" /></label>
+            <label class="tab-field"><span>BE buffer (pip)</span><input id="riskBeBuffer" type="number" step="1" value="0" /></label>
+          </div>
+          <div class="tab-section-title" style="margin-top:14px">Trailing từng lệnh (pip)</div>
+          <div class="tab-row">
+            <label class="tab-field"><span>Arm (pip)</span><input id="riskTradeTrailArm" type="number" step="1" /></label>
+            <label class="tab-field"><span>Distance (pip)</span><input id="riskTradeTrailDist" type="number" step="1" /></label>
+          </div>
+          <div class="tab-section-title" style="margin-top:14px">ATR (đẩy SL/TP lên sàn)</div>
+          <label class="tab-field" style="flex-direction:row;align-items:center;gap:8px;margin-bottom:10px">
+            <input type="checkbox" id="riskAtrEnabled" />
+            <span>Bật SL/TP theo ATR</span>
+          </label>
+          <div class="tab-row">
+            <label class="tab-field"><span>Timeframe</span>
+              <select id="riskAtrTf"><option>H1</option><option>M15</option><option>M30</option><option>H4</option><option>D1</option></select>
+            </label>
+            <label class="tab-field"><span>Period</span><input id="riskAtrPeriod" type="number" step="1" value="14" /></label>
+            <label class="tab-field"><span>SL × ATR</span><input id="riskAtrSlMult" type="number" step="0.1" value="1.5" /></label>
+            <label class="tab-field"><span>TP × ATR</span><input id="riskAtrTpMult" type="number" step="0.1" value="3" /></label>
+          </div>
+        </div>
+        <div class="tab-actions">
+          <button onclick="withButtonLoading(this, saveRiskConfig)">Lưu cấu hình rủi ro</button>
+          <button class="secondary" onclick="withButtonLoading(this, loadRiskConfig)">Làm mới</button>
+          <button class="danger" onclick="withButtonLoading(this, clearRiskConfig)">Xóa cấu hình</button>
+        </div>
+        <p class="tab-hint">RiskManager chạy nền liên tục khi EA online. SL/TP pip và ATR được đẩy lên sàn; các luật USD/trailing được server giám sát.</p>
       </div>
     </div>
 
@@ -1011,6 +1103,7 @@ function showAccount(accountId) {
   }
   loadInsights();
   loadTelegramStatus();
+  loadRiskConfig();
   updateDetailHeader();
   updateActionAvailability();
 }
@@ -1546,6 +1639,146 @@ async function disconnectTelegram() {
 }
 
 document.getElementById('telegramTradeSymbol')?.addEventListener('input', updateTelegramCmdHint);
+
+function riskNum(id) {
+  const v = document.getElementById(id)?.value.trim();
+  if (!v) return null;
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function riskInt(id) {
+  const v = document.getElementById(id)?.value.trim();
+  if (!v) return null;
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+function setRiskField(id, val, isInt) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.value = val != null && val !== '' ? String(val) : '';
+}
+
+function renderRiskStatus(status) {
+  const el = document.getElementById('riskStatusLine');
+  if (!el || !status) return;
+  const on = status.enabled ? 'BẬT' : 'TẮT';
+  const trail = status.trailing_armed ? ' · trailing armed' : '';
+  const trig = status.last_trigger ? ` · gần nhất: ${status.last_trigger}` : '';
+  el.textContent = `${on} · P/L trôi: ${status.floating_profit ?? '—'} · ${status.open_positions ?? 0} lệnh${trail}${trig}`;
+}
+
+function collectRiskConfig() {
+  return {
+    enabled: document.getElementById('riskEnabled').checked,
+    account_action: document.getElementById('riskAccountAction').value,
+    cooldown_seconds: parseFloat(document.getElementById('riskCooldown').value) || 5,
+    account_tp_usd: riskNum('riskAccountTpUsd'),
+    account_sl_usd: riskNum('riskAccountSlUsd'),
+    account_tp_pct: riskNum('riskAccountTpPct'),
+    account_sl_pct: riskNum('riskAccountSlPct'),
+    equity_floor: riskNum('riskEquityFloor'),
+    equity_ceiling: riskNum('riskEquityCeiling'),
+    max_drawdown_pct: riskNum('riskMaxDrawdownPct'),
+    min_margin_level_pct: riskNum('riskMinMarginLevel'),
+    daily_profit_target: riskNum('riskDailyProfit'),
+    daily_loss_limit: riskNum('riskDailyLoss'),
+    account_trailing_arm_usd: riskNum('riskTrailArmUsd'),
+    account_trailing_giveback_usd: riskNum('riskTrailGiveUsd'),
+    account_trailing_arm_pct: riskNum('riskTrailArmPct'),
+    account_trailing_giveback_pct: riskNum('riskTrailGivePct'),
+    max_positions: riskInt('riskMaxPositions'),
+    max_total_lot: riskNum('riskMaxLot'),
+    close_time: document.getElementById('riskCloseTime').value.trim() || null,
+    close_before_weekend: document.getElementById('riskCloseWeekend').checked,
+    trade_tp_usd: riskNum('riskTradeTpUsd'),
+    trade_sl_usd: riskNum('riskTradeSlUsd'),
+    trade_tp_pips: riskNum('riskTradeTpPips'),
+    trade_sl_pips: riskNum('riskTradeSlPips'),
+    atr_enabled: document.getElementById('riskAtrEnabled').checked,
+    atr_timeframe: document.getElementById('riskAtrTf').value,
+    atr_period: riskInt('riskAtrPeriod') || 14,
+    atr_sl_multiplier: riskNum('riskAtrSlMult') ?? 1.5,
+    atr_tp_multiplier: riskNum('riskAtrTpMult') ?? 3,
+    trade_trailing_arm_pips: riskNum('riskTradeTrailArm'),
+    trade_trailing_distance_pips: riskNum('riskTradeTrailDist'),
+    breakeven_arm_pips: riskNum('riskBeArm'),
+    breakeven_buffer_pips: riskNum('riskBeBuffer') ?? 0,
+    max_hold_minutes: riskInt('riskMaxHold'),
+  };
+}
+
+function applyRiskConfig(cfg, enabledFlag) {
+  cfg = cfg || {};
+  document.getElementById('riskEnabled').checked = !!enabledFlag;
+  document.getElementById('riskAccountAction').value = cfg.account_action || 'all';
+  setRiskField('riskCooldown', cfg.cooldown_seconds ?? 5);
+  setRiskField('riskAccountTpUsd', cfg.account_tp_usd);
+  setRiskField('riskAccountSlUsd', cfg.account_sl_usd);
+  setRiskField('riskAccountTpPct', cfg.account_tp_pct);
+  setRiskField('riskAccountSlPct', cfg.account_sl_pct);
+  setRiskField('riskEquityFloor', cfg.equity_floor);
+  setRiskField('riskEquityCeiling', cfg.equity_ceiling);
+  setRiskField('riskMaxDrawdownPct', cfg.max_drawdown_pct);
+  setRiskField('riskMinMarginLevel', cfg.min_margin_level_pct);
+  setRiskField('riskDailyProfit', cfg.daily_profit_target);
+  setRiskField('riskDailyLoss', cfg.daily_loss_limit);
+  setRiskField('riskTrailArmUsd', cfg.account_trailing_arm_usd);
+  setRiskField('riskTrailGiveUsd', cfg.account_trailing_giveback_usd);
+  setRiskField('riskTrailArmPct', cfg.account_trailing_arm_pct);
+  setRiskField('riskTrailGivePct', cfg.account_trailing_giveback_pct);
+  setRiskField('riskMaxPositions', cfg.max_positions, true);
+  setRiskField('riskMaxLot', cfg.max_total_lot);
+  document.getElementById('riskCloseTime').value = cfg.close_time || '';
+  document.getElementById('riskCloseWeekend').checked = !!cfg.close_before_weekend;
+  setRiskField('riskTradeTpUsd', cfg.trade_tp_usd);
+  setRiskField('riskTradeSlUsd', cfg.trade_sl_usd);
+  setRiskField('riskTradeTpPips', cfg.trade_tp_pips);
+  setRiskField('riskTradeSlPips', cfg.trade_sl_pips);
+  document.getElementById('riskAtrEnabled').checked = !!cfg.atr_enabled;
+  if (cfg.atr_timeframe) document.getElementById('riskAtrTf').value = cfg.atr_timeframe;
+  setRiskField('riskAtrPeriod', cfg.atr_period ?? 14, true);
+  setRiskField('riskAtrSlMult', cfg.atr_sl_multiplier ?? 1.5);
+  setRiskField('riskAtrTpMult', cfg.atr_tp_multiplier ?? 3);
+  setRiskField('riskTradeTrailArm', cfg.trade_trailing_arm_pips);
+  setRiskField('riskTradeTrailDist', cfg.trade_trailing_distance_pips);
+  setRiskField('riskBeArm', cfg.breakeven_arm_pips);
+  setRiskField('riskBeBuffer', cfg.breakeven_buffer_pips ?? 0);
+  setRiskField('riskMaxHold', cfg.max_hold_minutes, true);
+}
+
+async function loadRiskConfig() {
+  if (!currentAccountId) return;
+  const accountId = currentAccountId;
+  try {
+    const data = await api(`/api/${accountId}/risk`, 'GET');
+    if (accountId !== currentAccountId) return;
+    applyRiskConfig(data.config || {}, data.enabled);
+    renderRiskStatus(data.status);
+  } catch (e) { /* best-effort */ }
+}
+
+async function saveRiskConfig() {
+  if (!currentAccountId) return;
+  try {
+    const body = collectRiskConfig();
+    const data = await api(`/api/${currentAccountId}/risk`, 'POST', body);
+    renderRiskStatus(data.status);
+    toast('Đã lưu cấu hình RiskManager');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function clearRiskConfig() {
+  if (!currentAccountId) return;
+  if (!confirm('Xóa toàn bộ cấu hình rủi ro cho tài khoản này?')) return;
+  try {
+    await api(`/api/${currentAccountId}/risk`, 'DELETE');
+    applyRiskConfig({}, false);
+    renderRiskStatus({enabled: false, floating_profit: 0, open_positions: 0});
+    toast('Đã xóa cấu hình rủi ro');
+  } catch (e) { toast(e.message, true); }
+}
 
 function connectAccountWs() {
   const accountId = currentAccountId;

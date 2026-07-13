@@ -3,9 +3,11 @@ survive a Python restart (open positions/account don't need to; the EA
 re-sends those). Kept as plain sqlite3/SQL, no ORM - small surface, easy
 to read and change.
 """
+import json
 import sqlite3
+import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 DB_PATH = Path(__file__).parent / "trades.db"
 
@@ -51,10 +53,20 @@ _CREATE_ACCOUNT_SETTINGS_SQL = """
     )
 """
 
+_CREATE_ACCOUNT_RISK_SQL = """
+    CREATE TABLE IF NOT EXISTS account_risk (
+        account_id TEXT PRIMARY KEY,
+        enabled INTEGER NOT NULL DEFAULT 0,
+        config_json TEXT NOT NULL DEFAULT '{}',
+        updated_at INTEGER NOT NULL DEFAULT 0
+    )
+"""
+
 
 def init_db(db_path: Path = DB_PATH) -> None:
     conn = get_connection(db_path)
     conn.execute(_CREATE_ACCOUNT_SETTINGS_SQL)
+    conn.execute(_CREATE_ACCOUNT_RISK_SQL)
     _ensure_column(conn, "account_settings", "telegram_trade_symbol", "TEXT")
     _ensure_column(conn, "account_settings", "telegram_trade_lot", "REAL")
 
@@ -249,6 +261,72 @@ def clear_telegram_config(account_id: str, db_path: Path = DB_PATH) -> bool:
         """,
         (account_id,),
     )
+    conn.commit()
+    changed = cur.rowcount > 0
+    conn.close()
+    return changed
+
+
+def realized_pnl_since(account_id: str, since_epoch: int, db_path: Path = DB_PATH) -> float:
+    """Sum net P/L of deals closed on or after since_epoch (UTC unix time)."""
+    conn = get_connection(db_path)
+    row = conn.execute(
+        """
+        SELECT COALESCE(SUM(profit + swap + commission), 0) AS total
+        FROM deals
+        WHERE account_id = ? AND time_close >= ?
+        """,
+        (account_id, since_epoch),
+    ).fetchone()
+    conn.close()
+    return float(row["total"])
+
+
+def get_risk_config(account_id: str, db_path: Path = DB_PATH) -> Optional[dict]:
+    conn = get_connection(db_path)
+    row = conn.execute(
+        "SELECT enabled, config_json, updated_at FROM account_risk WHERE account_id = ?",
+        (account_id,),
+    ).fetchone()
+    conn.close()
+    if row is None:
+        return None
+    try:
+        config = json.loads(row["config_json"] or "{}")
+    except json.JSONDecodeError:
+        config = {}
+    return {
+        "enabled": bool(row["enabled"]),
+        "config": config,
+        "updated_at": int(row["updated_at"]),
+    }
+
+
+def set_risk_config(
+    account_id: str,
+    enabled: bool,
+    config: dict[str, Any],
+    db_path: Path = DB_PATH,
+) -> None:
+    conn = get_connection(db_path)
+    conn.execute(
+        """
+        INSERT INTO account_risk (account_id, enabled, config_json, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(account_id) DO UPDATE SET
+            enabled = excluded.enabled,
+            config_json = excluded.config_json,
+            updated_at = excluded.updated_at
+        """,
+        (account_id, 1 if enabled else 0, json.dumps(config), int(time.time())),
+    )
+    conn.commit()
+    conn.close()
+
+
+def clear_risk_config(account_id: str, db_path: Path = DB_PATH) -> bool:
+    conn = get_connection(db_path)
+    cur = conn.execute("DELETE FROM account_risk WHERE account_id = ?", (account_id,))
     conn.commit()
     changed = cur.rowcount > 0
     conn.close()

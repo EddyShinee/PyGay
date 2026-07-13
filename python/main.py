@@ -17,6 +17,7 @@ import db
 import handlers
 import web
 import telegram_commands
+import risk_manager
 
 SOCKET_HOST = os.environ.get("SOCKET_HOST", "127.0.0.1")
 SOCKET_PORT = int(os.environ.get("SOCKET_PORT", "9090"))
@@ -54,6 +55,7 @@ async def run() -> None:
     web_server = uvicorn.Server(web_config)
 
     asyncio.create_task(telegram_commands.run_poller(sessions))
+    asyncio.create_task(risk_manager.run_risk_supervisor(sessions))
     await asyncio.gather(server.start(), web_server.serve())
 
 

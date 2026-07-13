@@ -14,7 +14,7 @@ from MT5 accounts: web users are people allowed to open this dashboard
 import asyncio
 import logging
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -84,6 +84,44 @@ class TelegramConfigRequest(BaseModel):
     chat_id: str
     trade_symbol: str = ""
     trade_lot: float = 0.01
+
+
+class RiskConfigRequest(BaseModel):
+    enabled: bool = False
+    account_action: Literal["all", "matching"] = "all"
+    cooldown_seconds: float = 5.0
+    account_tp_usd: Optional[float] = None
+    account_sl_usd: Optional[float] = None
+    account_tp_pct: Optional[float] = None
+    account_sl_pct: Optional[float] = None
+    equity_floor: Optional[float] = None
+    equity_ceiling: Optional[float] = None
+    max_drawdown_pct: Optional[float] = None
+    min_margin_level_pct: Optional[float] = None
+    daily_profit_target: Optional[float] = None
+    daily_loss_limit: Optional[float] = None
+    account_trailing_arm_usd: Optional[float] = None
+    account_trailing_giveback_usd: Optional[float] = None
+    account_trailing_arm_pct: Optional[float] = None
+    account_trailing_giveback_pct: Optional[float] = None
+    max_positions: Optional[int] = None
+    max_total_lot: Optional[float] = None
+    close_time: Optional[str] = None
+    close_before_weekend: bool = False
+    trade_tp_usd: Optional[float] = None
+    trade_sl_usd: Optional[float] = None
+    trade_tp_pips: Optional[float] = None
+    trade_sl_pips: Optional[float] = None
+    atr_enabled: bool = False
+    atr_timeframe: str = "H1"
+    atr_period: int = 14
+    atr_sl_multiplier: float = 1.5
+    atr_tp_multiplier: float = 3.0
+    trade_trailing_arm_pips: Optional[float] = None
+    trade_trailing_distance_pips: Optional[float] = None
+    breakeven_arm_pips: Optional[float] = None
+    breakeven_buffer_pips: float = 0.0
+    max_hold_minutes: Optional[int] = None
 
 
 class RegisterRequest(BaseModel):
@@ -496,6 +534,45 @@ def create_app(sessions: SessionManager) -> FastAPI:
         except Exception as exc:
             raise HTTPException(400, f"Gửi thất bại: {exc}")
         return {"ok": True}
+
+    @protected.get("/api/{account_id}/risk")
+    async def get_risk(account_id: str, request: Request):
+        require_account_access(request, account_id)
+        row = db.get_risk_config(account_id)
+        session = sessions.get(account_id)
+        status = session.risk_manager.status() if session else {"enabled": False}
+        if row is None:
+            return {"configured": False, "config": {}, "status": status}
+        return {
+            "configured": True,
+            "enabled": row["enabled"],
+            "config": row["config"],
+            "updated_at": row["updated_at"],
+            "status": status,
+        }
+
+    @protected.post("/api/{account_id}/risk")
+    async def set_risk(account_id: str, req: RiskConfigRequest, request: Request):
+        require_account_access(request, account_id)
+        config = req.model_dump()
+        enabled = bool(config.pop("enabled", False))
+        db.set_risk_config(account_id, enabled, config)
+        session = sessions.get(account_id)
+        if session is not None:
+            session.risk_manager.reload_config()
+            status = session.risk_manager.status()
+        else:
+            status = {"enabled": enabled}
+        return {"ok": True, "status": status}
+
+    @protected.delete("/api/{account_id}/risk")
+    async def delete_risk(account_id: str, request: Request):
+        require_account_access(request, account_id)
+        removed = db.clear_risk_config(account_id)
+        session = sessions.get(account_id)
+        if session is not None:
+            session.risk_manager.reload_config()
+        return {"ok": True, "removed": removed}
 
     @protected.post("/api/{account_id}/history/fetch")
     async def fetch_history(account_id: str, req: HistoryFetchRequest, request: Request):

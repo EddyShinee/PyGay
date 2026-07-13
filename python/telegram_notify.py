@@ -75,6 +75,17 @@ def format_account_connected(account_id: str, broker: str) -> str:
     ])
 
 
+def format_risk_triggered(account_id: str, reason: str, detail: str = "") -> str:
+    lines = [
+        "🛡️ RiskManager kích hoạt",
+        f"#{account_id}",
+        reason,
+    ]
+    if detail:
+        lines.append(detail)
+    return "\n".join(lines)
+
+
 def _send_sync(
     bot_token: str,
     chat_id: str,

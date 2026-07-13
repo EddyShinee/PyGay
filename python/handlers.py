@@ -113,6 +113,7 @@ def register(server: SocketServer, sessions: SessionManager) -> None:
                         telegram_notify.format_modify_position(ticket, new_p["symbol"], old_p, new_p),
                     )
         session.has_synced_once = True
+        await session.risk_manager.evaluate()
 
     @server.on("order_result")
     async def on_order_result(client: Client, message: dict) -> None:
@@ -137,6 +138,8 @@ def register(server: SocketServer, sessions: SessionManager) -> None:
                     telegram_notify.format_drawdown_alert(client.account_id, pct, tier),
                 )
             session.last_drawdown_tier = tier
+
+        await session.risk_manager.evaluate()
 
     @server.on("symbols")
     async def on_symbols(client: Client, message: dict) -> None:
