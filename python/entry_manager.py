@@ -6,11 +6,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
 import account_entry
+import indicators
 import telegram_notify
 from grid_jobs import sl_tp_from_points
 
@@ -20,6 +21,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger("entry_manager")
 
 SUPERVISOR_INTERVAL_S = 1.0
+BARS_CACHE_TTL_S = 30.0
+INDICATOR_THROTTLE_S = 3.0
 
 
 def _utc_today() -> str:
@@ -39,11 +42,16 @@ class EntryConfig:
     max_open_positions: Optional[int] = None
     max_entries_per_day: Optional[int] = None
     only_if_flat: bool = False
-    # trigger_mode: schedule | price_above | price_below | interval
+    # trigger_mode: schedule | price_above | price_below | interval | indicators
     trigger_mode: str = "schedule"
     schedule_time: Optional[str] = None  # HH:MM local
     price_trigger: Optional[float] = None
     interval_minutes: Optional[int] = None
+    # Indicator-based entry (trigger_mode == "indicators")
+    indicator_timeframe: str = "H1"
+    indicator_logic: str = "all"  # all | any | majority
+    # { "rsi": {"enabled": true, "period": 14, ...}, ... }
+    indicators: dict = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Optional[dict]) -> "EntryConfig":
@@ -72,6 +80,11 @@ class EntryManager:
         self._last_ask: Optional[float] = None
         self._last_bid: Optional[float] = None
         self._last_trigger: Optional[str] = None
+        # Indicator engine caches
+        self._bars_cache: dict[str, tuple[float, list]] = {}
+        self._ind_calc_ts: float = 0.0
+        self._ind_cached: Optional[tuple[str, str]] = None
+        self._last_signals: dict[str, Optional[str]] = {}
 
     @property
     def account_id(self) -> str:
@@ -109,6 +122,7 @@ class EntryManager:
             "entries_today": self._entries_today,
             "last_ask": self._last_ask,
             "last_bid": self._last_bid,
+            "indicator_signals": dict(self._last_signals),
         }
 
     async def evaluate(self, symbol: str, bid: float, ask: float, point: float) -> None:
@@ -129,11 +143,18 @@ class EntryManager:
         if not self._guards_ok(cfg, symbol):
             return
 
-        reason = self._check_trigger(cfg, bid, ask, prev_bid, prev_ask)
-        if not reason:
-            return
+        side = cfg.side
+        if (cfg.trigger_mode or "").lower() == "indicators":
+            res = await self._indicator_signal(cfg, symbol)
+            if not res:
+                return
+            side, reason = res
+        else:
+            reason = self._check_trigger(cfg, bid, ask, prev_bid, prev_ask)
+            if not reason:
+                return
 
-        await self._execute_entry(cfg, symbol, bid, ask, point, reason)
+        await self._execute_entry(cfg, symbol, bid, ask, point, reason, side)
 
     def _guards_ok(self, cfg: EntryConfig, symbol: str) -> bool:
         positions = self._session.store.snapshot()
@@ -204,6 +225,86 @@ class EntryManager:
 
         return None
 
+    async def _get_bars(self, symbol: str, timeframe: str) -> list:
+        cache_key = f"{symbol}:{timeframe}"
+        now = time.monotonic()
+        cached = self._bars_cache.get(cache_key)
+        if cached and now - cached[0] < BARS_CACHE_TTL_S:
+            return cached[1]
+        try:
+            bars = await self._session.history_gateway.fetch(symbol, timeframe, 300)
+            bars = sorted(bars, key=lambda b: int(b["time"]))
+            self._bars_cache[cache_key] = (now, bars)
+            return bars
+        except Exception:
+            logger.exception("[%s] bars fetch failed for %s", self.account_id, symbol)
+            return cached[1] if cached else []
+
+    async def _indicator_signal(
+        self, cfg: EntryConfig, symbol: str
+    ) -> Optional[tuple[str, str]]:
+        """Evaluate enabled indicators and combine into a (side, reason) or None.
+        Throttled so repeated ticks don't recompute more than every few seconds."""
+        now = time.monotonic()
+        if now - self._ind_calc_ts < INDICATOR_THROTTLE_S:
+            return self._ind_cached
+
+        self._ind_calc_ts = now
+        self._ind_cached = None
+
+        cfg_inds = cfg.indicators or {}
+        enabled = [
+            (key, params)
+            for key, params in cfg_inds.items()
+            if isinstance(params, dict) and params.get("enabled")
+        ]
+        self._last_signals = {}
+        if not enabled:
+            return None
+
+        tf = cfg.indicator_timeframe or "H1"
+        bars = await self._get_bars(symbol, tf)
+        if len(bars) < 30:
+            return None
+
+        buys = 0
+        sells = 0
+        fired: list[str] = []
+        for key, params in enabled:
+            sig = indicators.indicator_signal(key, bars, params)
+            self._last_signals[key] = sig
+            if sig == "BUY":
+                buys += 1
+                fired.append(f"{key}↑")
+            elif sig == "SELL":
+                sells += 1
+                fired.append(f"{key}↓")
+
+        logic = (cfg.indicator_logic or "all").lower()
+        total = len(enabled)
+        side: Optional[str] = None
+        if logic == "all":
+            if buys == total:
+                side = "BUY"
+            elif sells == total:
+                side = "SELL"
+        elif logic == "any":
+            if buys > 0 and sells == 0:
+                side = "BUY"
+            elif sells > 0 and buys == 0:
+                side = "SELL"
+        else:  # majority
+            if buys > sells:
+                side = "BUY"
+            elif sells > buys:
+                side = "SELL"
+
+        if side is None:
+            return None
+        reason = f"Chỉ báo [{logic}] {', '.join(fired)} — {side}"
+        self._ind_cached = (side, reason)
+        return self._ind_cached
+
     async def _execute_entry(
         self,
         cfg: EntryConfig,
@@ -212,18 +313,20 @@ class EntryManager:
         ask: float,
         point: float,
         reason: str,
+        side: Optional[str] = None,
     ) -> None:
+        side = side or cfg.side
         self._acting = True
         self._last_trigger = reason
         try:
-            price = ask if cfg.side == "BUY" else bid
+            price = ask if side == "BUY" else bid
             unit = self._unit_factor()
             sl_pts = (cfg.sl_distance or 0) * unit
             tp_pts = (cfg.tp_distance or 0) * unit
-            sl, tp = sl_tp_from_points(cfg.side, price, sl_pts, tp_pts, point)
+            sl, tp = sl_tp_from_points(side, price, sl_pts, tp_pts, point)
 
             result = await self._session.gateway.open_order(
-                symbol, cfg.side, cfg.volume, sl, tp
+                symbol, side, cfg.volume, sl, tp
             )
             if result.get("ok"):
                 self._last_entry_ts = time.monotonic()
@@ -232,12 +335,12 @@ class EntryManager:
                     self._entries_day = today
                     self._entries_today = 0
                 self._entries_today += 1
-                logger.info("[%s] entry %s %s %.2f lot: %s", self.account_id, cfg.side, symbol, cfg.volume, reason)
+                logger.info("[%s] entry %s %s %.2f lot: %s", self.account_id, side, symbol, cfg.volume, reason)
                 await telegram_notify.notify(
                     self.account_id,
                     telegram_notify.format_entry_triggered(
                         self.account_id,
-                        cfg.side,
+                        side,
                         symbol,
                         cfg.volume,
                         reason,

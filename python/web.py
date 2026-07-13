@@ -14,7 +14,7 @@ from MT5 accounts: web users are people allowed to open this dashboard
 import asyncio
 import logging
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -139,10 +139,15 @@ class EntryConfigRequest(BaseModel):
     max_open_positions: Optional[int] = None
     max_entries_per_day: Optional[int] = None
     only_if_flat: bool = False
-    trigger_mode: Literal["schedule", "price_above", "price_below", "interval"] = "schedule"
+    trigger_mode: Literal[
+        "schedule", "price_above", "price_below", "interval", "indicators"
+    ] = "schedule"
     schedule_time: Optional[str] = None
     price_trigger: Optional[float] = None
     interval_minutes: Optional[int] = None
+    indicator_timeframe: str = "H1"
+    indicator_logic: Literal["all", "any", "majority"] = "all"
+    indicators: dict[str, Any] = {}
 
 
 class RegisterRequest(BaseModel):

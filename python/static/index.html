@@ -723,6 +723,7 @@
                 <option value="price_above">Giá vượt ngưỡng (BUY)</option>
                 <option value="price_below">Giá xuống ngưỡng (SELL)</option>
                 <option value="interval">Lặp theo phút</option>
+                <option value="indicators">Chỉ báo kỹ thuật</option>
               </select>
             </label>
           </div>
@@ -735,6 +736,31 @@
           <div class="tab-row" id="entryFieldInterval" style="display:none">
             <label class="tab-field"><span>Chu kỳ (phút)</span><input id="entryIntervalMin" type="number" step="1" min="1" /></label>
           </div>
+        </div>
+        <div class="tab-section" id="entryFieldIndicators" style="display:none">
+          <div class="tab-section-title">Chỉ báo kỹ thuật</div>
+          <div class="tab-row">
+            <label class="tab-field"><span>Khung thời gian</span>
+              <select id="entryIndicatorTf">
+                <option value="M1">M1</option>
+                <option value="M5">M5</option>
+                <option value="M15">M15</option>
+                <option value="M30">M30</option>
+                <option value="H1">H1</option>
+                <option value="H4">H4</option>
+                <option value="D1">D1</option>
+              </select>
+            </label>
+            <label class="tab-field"><span>Điều kiện gộp</span>
+              <select id="entryIndicatorLogic">
+                <option value="all">Tất cả cùng chiều (an toàn)</option>
+                <option value="any">Bất kỳ (không mâu thuẫn)</option>
+                <option value="majority">Đa số</option>
+              </select>
+            </label>
+          </div>
+          <p class="tab-hint">Bật/tắt và tinh chỉnh từng chỉ báo. Hướng lệnh (BUY/SELL) do chỉ báo quyết định.</p>
+          <div id="entryIndicatorList"></div>
         </div>
         <div class="tab-section">
           <div class="tab-section-title">Giới hạn</div>
@@ -1874,6 +1900,66 @@ function updateEntryTriggerFields() {
   document.getElementById('entryFieldSchedule').style.display = mode === 'schedule' ? '' : 'none';
   document.getElementById('entryFieldPrice').style.display = (mode === 'price_above' || mode === 'price_below') ? '' : 'none';
   document.getElementById('entryFieldInterval').style.display = mode === 'interval' ? '' : 'none';
+  const ind = document.getElementById('entryFieldIndicators');
+  if (ind) ind.style.display = mode === 'indicators' ? '' : 'none';
+}
+
+// Meta MUST stay in sync with python/indicators.py INDICATOR_DEFAULTS.
+const ENTRY_INDICATORS = [
+  {key:'rsi', label:'RSI', fields:[['period','Period',14],['oversold','Quá bán',30],['overbought','Quá mua',70]]},
+  {key:'macd', label:'MACD', fields:[['fast','EMA nhanh',12],['slow','EMA chậm',26],['signal','Signal',9]]},
+  {key:'sma_cross', label:'SMA Cross', fields:[['fast','SMA nhanh',10],['slow','SMA chậm',30]]},
+  {key:'ema_cross', label:'EMA Cross', fields:[['fast','EMA nhanh',12],['slow','EMA chậm',26]]},
+  {key:'bollinger', label:'Bollinger Bands', fields:[['period','Period',20],['stddev','Độ lệch chuẩn',2]]},
+  {key:'stochastic', label:'Stochastic', fields:[['k_period','%K period',14],['oversold','Quá bán',20],['overbought','Quá mua',80]]},
+  {key:'cci', label:'CCI', fields:[['period','Period',20],['threshold','Ngưỡng',100]]},
+  {key:'momentum', label:'Momentum (ROC%)', fields:[['period','Period',10],['threshold','Ngưỡng %',0.1]]},
+  {key:'williams', label:'Williams %R', fields:[['period','Period',14],['oversold','Quá bán',-80],['overbought','Quá mua',-20]]},
+  {key:'adx', label:'ADX (+DI/-DI)', fields:[['period','Period',14],['threshold','Ngưỡng ADX',25]]},
+];
+
+function renderEntryIndicators() {
+  const box = document.getElementById('entryIndicatorList');
+  if (!box) return;
+  box.innerHTML = ENTRY_INDICATORS.map(ind => `
+    <div class="tab-section" style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px">
+      <label class="tab-field" style="flex-direction:row;align-items:center;gap:8px;margin-bottom:6px">
+        <input type="checkbox" id="ind_${ind.key}_enabled" />
+        <span style="font-weight:600">${ind.label}</span>
+        <span id="ind_${ind.key}_sig" class="tab-hint" style="margin:0 0 0 auto"></span>
+      </label>
+      <div class="tab-row">
+        ${ind.fields.map(f => `<label class="tab-field"><span>${f[1]}</span><input id="ind_${ind.key}_${f[0]}" type="number" step="any" value="${f[2]}" /></label>`).join('')}
+      </div>
+    </div>`).join('');
+}
+
+function collectEntryIndicators() {
+  const out = {};
+  for (const ind of ENTRY_INDICATORS) {
+    const en = document.getElementById(`ind_${ind.key}_enabled`);
+    const o = { enabled: !!(en && en.checked) };
+    for (const f of ind.fields) {
+      const el = document.getElementById(`ind_${ind.key}_${f[0]}`);
+      const v = el ? parseFloat(el.value) : NaN;
+      o[f[0]] = Number.isFinite(v) ? v : f[2];
+    }
+    out[ind.key] = o;
+  }
+  return out;
+}
+
+function applyEntryIndicators(inds) {
+  inds = inds || {};
+  for (const ind of ENTRY_INDICATORS) {
+    const cfg = inds[ind.key] || {};
+    const en = document.getElementById(`ind_${ind.key}_enabled`);
+    if (en) en.checked = !!cfg.enabled;
+    for (const f of ind.fields) {
+      const el = document.getElementById(`ind_${ind.key}_${f[0]}`);
+      if (el && cfg[f[0]] != null) el.value = cfg[f[0]];
+    }
+  }
 }
 
 function renderEntryStatus(status) {
@@ -1882,6 +1968,15 @@ function renderEntryStatus(status) {
   const on = status.enabled ? 'BẬT' : 'TẮT';
   const trig = status.last_trigger ? ` · gần nhất: ${status.last_trigger}` : '';
   el.textContent = `${on} · ${status.symbol || '—'} ${status.side || ''} · ${status.open_on_symbol ?? 0} lệnh symbol · ${status.entries_today ?? 0} lần hôm nay${trig}`;
+  const sigs = status.indicator_signals || {};
+  for (const ind of ENTRY_INDICATORS) {
+    const badge = document.getElementById(`ind_${ind.key}_sig`);
+    if (!badge) continue;
+    const s = sigs[ind.key];
+    if (s === 'BUY') { badge.textContent = '▲ BUY'; badge.style.color = 'var(--series-buy)'; }
+    else if (s === 'SELL') { badge.textContent = '▼ SELL'; badge.style.color = 'var(--series-sell)'; }
+    else { badge.textContent = ''; }
+  }
 }
 
 function collectEntryConfig() {
@@ -1901,6 +1996,9 @@ function collectEntryConfig() {
     schedule_time: document.getElementById('entryScheduleTime').value.trim() || null,
     price_trigger: riskNum('entryPriceTrigger'),
     interval_minutes: riskInt('entryIntervalMin'),
+    indicator_timeframe: document.getElementById('entryIndicatorTf').value,
+    indicator_logic: document.getElementById('entryIndicatorLogic').value,
+    indicators: collectEntryIndicators(),
   };
 }
 
@@ -1922,6 +2020,9 @@ function applyEntryConfig(cfg, enabledFlag) {
   document.getElementById('entryScheduleTime').value = cfg.schedule_time || '';
   setRiskField('entryPriceTrigger', cfg.price_trigger);
   setRiskField('entryIntervalMin', cfg.interval_minutes, true);
+  document.getElementById('entryIndicatorTf').value = cfg.indicator_timeframe || 'H1';
+  document.getElementById('entryIndicatorLogic').value = cfg.indicator_logic || 'all';
+  applyEntryIndicators(cfg.indicators);
   updateEntryTriggerFields();
 }
 
@@ -1958,6 +2059,7 @@ async function clearEntryConfig() {
 }
 
 document.getElementById('entrySltpUnit')?.addEventListener('change', updateEntryUnitLabels);
+renderEntryIndicators();
 
 function connectAccountWs() {
   const accountId = currentAccountId;
