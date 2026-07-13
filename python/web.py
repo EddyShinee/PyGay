@@ -142,7 +142,8 @@ class EntryConfigRequest(BaseModel):
     max_entries_per_day: Optional[int] = None
     only_if_flat: bool = False
     trigger_mode: Literal[
-        "schedule", "price_above", "price_below", "interval", "indicators", "ml"
+        "schedule", "price_above", "price_below", "interval",
+        "indicators", "ml", "indicators_ml"
     ] = "schedule"
     schedule_time: Optional[str] = None
     price_trigger: Optional[float] = None

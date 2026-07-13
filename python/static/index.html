@@ -818,6 +818,7 @@
                   <option value="interval">Lặp theo phút</option>
                   <option value="indicators">Chỉ báo kỹ thuật</option>
                   <option value="ml">Machine Learning</option>
+                  <option value="indicators_ml">Chỉ báo + ML (ML xác nhận)</option>
                 </select>
               </label>
             </div>
@@ -2078,10 +2079,11 @@ function updateEntryTriggerFields() {
   document.getElementById('entryFieldSchedule').style.display = mode === 'schedule' ? '' : 'none';
   document.getElementById('entryFieldPrice').style.display = (mode === 'price_above' || mode === 'price_below') ? '' : 'none';
   document.getElementById('entryFieldInterval').style.display = mode === 'interval' ? '' : 'none';
+  const combo = mode === 'indicators_ml';
   const ind = document.getElementById('entryGroupIndicators');
-  if (ind) ind.style.display = mode === 'indicators' ? '' : 'none';
+  if (ind) ind.style.display = (mode === 'indicators' || combo) ? '' : 'none';
   const mlG = document.getElementById('entryGroupML');
-  if (mlG) mlG.style.display = mode === 'ml' ? '' : 'none';
+  if (mlG) mlG.style.display = (mode === 'ml' || combo) ? '' : 'none';
 }
 
 function updateEntryLogicFields() {

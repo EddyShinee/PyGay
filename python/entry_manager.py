@@ -102,6 +102,10 @@ class _SymState:
     ind_calc_ts: float = 0.0
     ind_cached: Optional[tuple] = None
     last_signals: dict = field(default_factory=dict)
+    # ML has its own throttle/cache so combined mode can compute both without
+    # the two engines clobbering each other's cached result.
+    ml_calc_ts: float = 0.0
+    ml_cached: Optional[tuple] = None
     last_ml_proba: Optional[float] = None
     last_trigger: Optional[str] = None
 
@@ -242,6 +246,17 @@ class EntryManager:
             if not res:
                 return
             side, reason = res
+        elif mode == "indicators_ml":
+            # ML acts as a confirmation filter: indicators AND the model must
+            # agree on the same direction before we enter.
+            res_ind = await self._indicator_signal(cfg, symbol, st)
+            res_ml = await self._ml_signal(cfg, symbol, st)
+            if not res_ind or not res_ml:
+                return
+            if res_ind[0] != res_ml[0]:
+                return
+            side = res_ind[0]
+            reason = f"Chỉ báo + ML cùng {side} ({res_ml[1]})"
         else:
             reason = self._check_trigger(cfg, symbol, st, bid, ask, prev_bid, prev_ask)
             if not reason:
@@ -421,10 +436,10 @@ class EntryManager:
         """Evaluate the trained ML model on the latest bars. Throttled like
         the indicator path. Returns (side, reason) or None."""
         now = time.monotonic()
-        if now - st.ind_calc_ts < INDICATOR_THROTTLE_S:
-            return st.ind_cached
-        st.ind_calc_ts = now
-        st.ind_cached = None
+        if now - st.ml_calc_ts < INDICATOR_THROTTLE_S:
+            return st.ml_cached
+        st.ml_calc_ts = now
+        st.ml_cached = None
         st.last_ml_proba = None
 
         ml_cfg = cfg.ml or {}
@@ -444,8 +459,8 @@ class EntryManager:
         if side is None:
             return None
         reason = f"ML p(up)={proba:.2f} ngưỡng {threshold:.2f} — {side}"
-        st.ind_cached = (side, reason)
-        return st.ind_cached
+        st.ml_cached = (side, reason)
+        return st.ml_cached
 
     async def _execute_entry(
         self,
