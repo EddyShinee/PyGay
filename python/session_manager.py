@@ -65,6 +65,11 @@ class SessionManager:
         self.server = server
         self.sessions: dict[str, AccountSession] = {}
         self._subscribers: set[asyncio.Queue] = set()
+        # Coalesced overview broadcasts: account/position updates arrive every
+        # tick, but rebuilding the overview hits Supabase per subscriber, so we
+        # push at most once per interval instead of on every message.
+        self._notify_task: Optional[asyncio.Task] = None
+        self._notify_interval = 2.0
 
     def get(self, account_id: Optional[str]) -> Optional[AccountSession]:
         if account_id is None:
@@ -122,3 +127,18 @@ class SessionManager:
         accounts = self.list_accounts()
         for queue in list(self._subscribers):
             await queue.put(accounts)
+
+    def request_notify(self) -> None:
+        """Schedule a coalesced overview broadcast. Multiple calls within the
+        throttle window collapse into a single push, so live balance/equity/
+        floating/open-count reach the accounts overview without hammering
+        Supabase on every incoming tick."""
+        if not self._subscribers:
+            return
+        if self._notify_task is not None and not self._notify_task.done():
+            return
+        self._notify_task = asyncio.ensure_future(self._delayed_notify())
+
+    async def _delayed_notify(self) -> None:
+        await asyncio.sleep(self._notify_interval)
+        await self._notify()

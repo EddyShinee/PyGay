@@ -848,14 +848,18 @@
                 </select>
               </label>
               <label class="tab-field"><span>Điều kiện gộp</span>
-                <select id="entryIndicatorLogic">
+                <select id="entryIndicatorLogic" onchange="updateEntryLogicFields()">
                   <option value="all">Tất cả cùng chiều (an toàn)</option>
                   <option value="any">Bất kỳ (không mâu thuẫn)</option>
                   <option value="majority">Đa số</option>
+                  <option value="threshold">Ngưỡng: ≥ N cùng chiều (không có cái ngược)</option>
                 </select>
               </label>
+              <label class="tab-field" id="entryMinAgreeField" style="display:none"><span>Số chỉ báo cùng chiều tối thiểu (N)</span>
+                <input id="entryIndicatorMinAgree" type="number" step="1" min="1" value="2" />
+              </label>
             </div>
-            <p class="tab-hint">Bật/tắt và tinh chỉnh từng chỉ báo. Mỗi chỉ báo có thể chọn <b>khung TG riêng</b>; để "(theo khung chung)" thì dùng khung mặc định ở trên. Hướng lệnh do chỉ báo quyết định — chọn ô "Hướng" = <b>Cả hai</b> để vào cả BUY và SELL, hoặc BUY/SELL để chỉ vào một chiều.</p>
+            <p class="tab-hint">Bật/tắt và tinh chỉnh từng chỉ báo. Mỗi chỉ báo có thể chọn <b>khung TG riêng</b>; để "(theo khung chung)" thì dùng khung mặc định ở trên. Hướng lệnh do chỉ báo quyết định — chọn ô "Hướng" = <b>Cả hai</b> để vào cả BUY và SELL, hoặc BUY/SELL để chỉ vào một chiều.<br>Điều kiện gộp: <b>Tất cả</b> = mọi chỉ báo phải cùng chiều · <b>Bất kỳ</b> = ≥1 cùng chiều &amp; không có cái ngược · <b>Đa số</b> = bên nhiều hơn thắng · <b>Ngưỡng</b> = ≥ N cùng chiều &amp; không có cái ngược.</p>
             <div id="entryIndicatorList"></div>
           </div>
         </details>
@@ -2080,6 +2084,12 @@ function updateEntryTriggerFields() {
   if (mlG) mlG.style.display = mode === 'ml' ? '' : 'none';
 }
 
+function updateEntryLogicFields() {
+  const logic = document.getElementById('entryIndicatorLogic')?.value || 'all';
+  const f = document.getElementById('entryMinAgreeField');
+  if (f) f.style.display = logic === 'threshold' ? '' : 'none';
+}
+
 // Holds the trained ML model between loads/saves so saving other settings
 // never wipes the weights. Populated on load and after training.
 let entryMlModel = null;
@@ -2290,6 +2300,7 @@ function collectEntryConfig() {
     interval_minutes: riskInt('entryIntervalMin'),
     indicator_timeframe: document.getElementById('entryIndicatorTf').value,
     indicator_logic: document.getElementById('entryIndicatorLogic').value,
+    indicator_min_agree: parseInt(document.getElementById('entryIndicatorMinAgree').value) || 2,
     indicators: collectEntryIndicators(),
     ml: collectEntryMl(),
   };
@@ -2329,6 +2340,8 @@ function applyEntryConfig(cfg, enabledFlag) {
   setRiskField('entryIntervalMin', cfg.interval_minutes, true);
   document.getElementById('entryIndicatorTf').value = cfg.indicator_timeframe || 'H1';
   document.getElementById('entryIndicatorLogic').value = cfg.indicator_logic || 'all';
+  setRiskField('entryIndicatorMinAgree', cfg.indicator_min_agree ?? 2);
+  updateEntryLogicFields();
   applyEntryIndicators(cfg.indicators);
   applyEntryMl(cfg.ml);
   updateEntryTriggerFields();

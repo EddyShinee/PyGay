@@ -54,7 +54,10 @@ class EntryConfig:
     interval_minutes: Optional[int] = None
     # Indicator-based entry (trigger_mode == "indicators")
     indicator_timeframe: str = "H1"
-    indicator_logic: str = "all"  # all | any | majority
+    indicator_logic: str = "all"  # all | any | majority | threshold
+    # For indicator_logic == "threshold": enter when >= this many indicators
+    # agree on a direction AND none point the other way.
+    indicator_min_agree: int = 2
     # { "rsi": {"enabled": true, "period": 14, ...}, ... }
     indicators: dict = field(default_factory=dict)
     # Machine-learning entry (trigger_mode == "ml"). Holds the trained model
@@ -387,6 +390,13 @@ class EntryManager:
             if buys > 0 and sells == 0:
                 side = "BUY"
             elif sells > 0 and buys == 0:
+                side = "SELL"
+        elif logic == "threshold":
+            # Need at least N agreeing AND nothing pointing the other way.
+            need = max(1, int(cfg.indicator_min_agree or 1))
+            if buys >= need and sells == 0:
+                side = "BUY"
+            elif sells >= need and buys == 0:
                 side = "SELL"
         else:  # majority
             if buys > sells:

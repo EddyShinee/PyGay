@@ -116,6 +116,8 @@ def register(server: SocketServer, sessions: SessionManager) -> None:
                     )
         session.has_synced_once = True
         await session.risk_manager.evaluate()
+        # Refresh the accounts overview (open_count / floating P&L) - coalesced.
+        sessions.request_notify()
 
     @server.on_immediate("order_result")
     async def on_order_result(client: Client, message: dict) -> None:
@@ -142,6 +144,8 @@ def register(server: SocketServer, sessions: SessionManager) -> None:
             session.last_drawdown_tier = tier
 
         await session.risk_manager.evaluate()
+        # Refresh the accounts overview (balance / equity) - coalesced.
+        sessions.request_notify()
 
     @server.on("symbols")
     async def on_symbols(client: Client, message: dict) -> None:

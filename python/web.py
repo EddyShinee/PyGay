@@ -148,7 +148,8 @@ class EntryConfigRequest(BaseModel):
     price_trigger: Optional[float] = None
     interval_minutes: Optional[int] = None
     indicator_timeframe: str = "H1"
-    indicator_logic: Literal["all", "any", "majority"] = "all"
+    indicator_logic: Literal["all", "any", "majority", "threshold"] = "all"
+    indicator_min_agree: int = 2
     indicators: dict[str, Any] = {}
     ml: dict[str, Any] = {}
 
