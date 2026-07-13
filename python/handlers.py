@@ -117,7 +117,7 @@ def register(server: SocketServer, sessions: SessionManager) -> None:
         session.has_synced_once = True
         await session.risk_manager.evaluate()
 
-    @server.on("order_result")
+    @server.on_immediate("order_result")
     async def on_order_result(client: Client, message: dict) -> None:
         session = sessions.get(client.account_id)
         if session is not None:
@@ -152,17 +152,17 @@ def register(server: SocketServer, sessions: SessionManager) -> None:
         symbols = [s for s in raw.split(",") if s]
         await session.symbol_store.update(symbols)
 
-    @server.on("history_begin")
+    @server.on_immediate("history_begin")
     async def on_history_begin(client: Client, message: dict) -> None:
         pass  # nothing to do - HistoryGateway.fetch() already starts with an empty list
 
-    @server.on("bar")
+    @server.on_immediate("bar")
     async def on_bar(client: Client, message: dict) -> None:
         session = sessions.get(client.account_id)
         if session is not None:
             session.history_gateway.on_bar(message)
 
-    @server.on("history_end")
+    @server.on_immediate("history_end")
     async def on_history_end(client: Client, message: dict) -> None:
         session = sessions.get(client.account_id)
         if session is not None:

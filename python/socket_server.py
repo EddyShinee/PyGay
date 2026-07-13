@@ -56,6 +56,14 @@ class SocketServer:
         self.host = host
         self.port = port
         self._handlers: dict[str, Handler] = {}
+        # Handlers that must run inline in the read loop instead of the ordered
+        # per-client worker. These are the ones that only correlate a reply back
+        # to a pending future (order_result, bar, history_end, ...). Running them
+        # inline is what breaks the re-entrant deadlock: a business handler
+        # (tick/account/positions) can await an EA reply while the read loop
+        # stays free to read that very reply and resolve the future. See
+        # _handle_client for the routing.
+        self._immediate_handlers: dict[str, Handler] = {}
         # List, not set: order must reflect connection order so clients()[-1]
         # reliably means "most recently connected" (see TradeGateway).
         self._clients: list[Client] = []
@@ -63,9 +71,26 @@ class SocketServer:
         self._server: Optional[asyncio.AbstractServer] = None
 
     def on(self, msg_type: str):
-        """Decorator: register handler for message["type"] == msg_type."""
+        """Decorator: register an ordered handler for message["type"] == msg_type.
+
+        Ordered handlers run one-at-a-time per client via a worker task, so the
+        order they arrive on the wire is preserved (important for the
+        positions_begin/position/positions_end snapshot burst)."""
         def register(fn: Handler) -> Handler:
             self._handlers[msg_type] = fn
+            return fn
+        return register
+
+    def on_immediate(self, msg_type: str):
+        """Decorator: register a handler that runs inline in the read loop.
+
+        Use ONLY for fast, non-blocking handlers that correlate a reply to a
+        pending request (they must not await anything slow). This keeps the
+        read loop able to service EA replies while an ordered handler is still
+        awaiting one - without it, request/response over the same socket
+        deadlocks until it times out."""
+        def register(fn: Handler) -> Handler:
+            self._immediate_handlers[msg_type] = fn
             return fn
         return register
 
@@ -96,6 +121,13 @@ class SocketServer:
         self._clients.append(client)
         logger.info("client connected: %s", client.address)
         buffer = b""
+        # Ordered business messages go through this queue and are handled one at
+        # a time by a dedicated worker, so the read loop below never blocks on a
+        # slow handler. Reply messages (immediate handlers) are dispatched right
+        # here in the read loop so a worker awaiting an EA reply can never
+        # starve itself of that reply.
+        queue: asyncio.Queue = asyncio.Queue()
+        worker = asyncio.ensure_future(self._client_worker(client, queue))
         try:
             while True:
                 chunk = await reader.read(4096)
@@ -104,10 +136,18 @@ class SocketServer:
                 buffer += chunk
                 messages, buffer = decode_lines(buffer)
                 for message in messages:
-                    await self._dispatch(client, message)
+                    if message.get("type") in self._immediate_handlers:
+                        await self._dispatch(client, message)
+                    else:
+                        queue.put_nowait(message)
         except (ConnectionResetError, asyncio.IncompleteReadError):
             pass
         finally:
+            worker.cancel()
+            try:
+                await worker
+            except (asyncio.CancelledError, Exception):
+                pass
             if client in self._clients:
                 self._clients.remove(client)
             await client.close()
@@ -118,9 +158,18 @@ class SocketServer:
                 except Exception:
                     logger.exception("on_disconnect handler failed")
 
+    async def _client_worker(self, client: Client, queue: "asyncio.Queue") -> None:
+        """Process one client's ordered messages sequentially, off the read loop."""
+        while True:
+            message = await queue.get()
+            try:
+                await self._dispatch(client, message)
+            finally:
+                queue.task_done()
+
     async def _dispatch(self, client: Client, message: dict) -> None:
         msg_type = message.get("type")
-        handler = self._handlers.get(msg_type)
+        handler = self._handlers.get(msg_type) or self._immediate_handlers.get(msg_type)
         if handler is None:
             logger.warning("no handler for type=%r", msg_type)
             return
