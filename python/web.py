@@ -24,6 +24,7 @@ from session_manager import SessionManager, AccountSession
 import account_links
 import account_risk
 import account_entry
+import ml_entry
 import auth
 import history
 import telegram_notify
@@ -140,7 +141,7 @@ class EntryConfigRequest(BaseModel):
     max_entries_per_day: Optional[int] = None
     only_if_flat: bool = False
     trigger_mode: Literal[
-        "schedule", "price_above", "price_below", "interval", "indicators"
+        "schedule", "price_above", "price_below", "interval", "indicators", "ml"
     ] = "schedule"
     schedule_time: Optional[str] = None
     price_trigger: Optional[float] = None
@@ -148,6 +149,17 @@ class EntryConfigRequest(BaseModel):
     indicator_timeframe: str = "H1"
     indicator_logic: Literal["all", "any", "majority"] = "all"
     indicators: dict[str, Any] = {}
+    ml: dict[str, Any] = {}
+
+
+class MLTrainRequest(BaseModel):
+    symbol: str = "XAUUSD"
+    timeframe: str = "H1"
+    count: int = 1000
+    lookahead: int = 3
+    lags: int = 5
+    threshold: float = 0.58
+    epochs: int = 400
 
 
 class RegisterRequest(BaseModel):
@@ -674,6 +686,60 @@ def create_app(sessions: SessionManager) -> FastAPI:
         if session is not None:
             await session.entry_manager.reload_config()
         return {"ok": True, "removed": removed}
+
+    @protected.post("/api/{account_id}/entry/ml/train")
+    async def train_entry_ml(account_id: str, req: MLTrainRequest, request: Request):
+        """Fetch history from the EA, train the logistic model, and store the
+        trained model inside the account's entry config (Supabase)."""
+        session = get_session(account_id, request)
+        require_connected(session)
+        try:
+            bars = await session.history_gateway.fetch(req.symbol, req.timeframe, req.count)
+        except (RuntimeError, asyncio.TimeoutError) as exc:
+            raise HTTPException(400, f"Không lấy được dữ liệu lịch sử: {exc}")
+        try:
+            model = await asyncio.to_thread(
+                ml_entry.train,
+                bars,
+                {"lookahead": req.lookahead, "lags": req.lags, "epochs": req.epochs},
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        model["timeframe"] = req.timeframe
+
+        # Merge the trained model into the existing entry config's ml block.
+        try:
+            row = await asyncio.to_thread(account_entry.get_entry_config, account_id)
+        except account_entry.EntryConfigError as exc:
+            raise HTTPException(500, str(exc))
+        except account_entry.EntryUnavailable as exc:
+            raise HTTPException(503, str(exc))
+        config = dict(row["config"]) if row else {}
+        enabled = bool(row["enabled"]) if row else False
+        ml_block = dict(config.get("ml") or {})
+        ml_block.update({
+            "enabled": ml_block.get("enabled", True),
+            "timeframe": req.timeframe,
+            "threshold": req.threshold,
+            "model": model,
+        })
+        config["ml"] = ml_block
+        try:
+            await asyncio.to_thread(account_entry.set_entry_config, account_id, enabled, config)
+        except account_entry.EntryConfigError as exc:
+            raise HTTPException(400, str(exc))
+        except account_entry.EntryUnavailable as exc:
+            raise HTTPException(503, str(exc))
+        if session is not None:
+            await session.entry_manager.reload_config()
+        return {
+            "ok": True,
+            "samples": model["samples"],
+            "accuracy": model["accuracy"],
+            "up_rate": model["up_rate"],
+            "trained_at": model["trained_at"],
+            "feature_names": model["feature_names"],
+        }
 
     @protected.post("/api/{account_id}/history/fetch")
     async def fetch_history(account_id: str, req: HistoryFetchRequest, request: Request):

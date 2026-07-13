@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Optional
 
 import account_entry
 import indicators
+import ml_entry
 import telegram_notify
 from grid_jobs import sl_tp_from_points
 
@@ -55,6 +56,9 @@ class EntryConfig:
     indicator_logic: str = "all"  # all | any | majority
     # { "rsi": {"enabled": true, "period": 14, ...}, ... }
     indicators: dict = field(default_factory=dict)
+    # Machine-learning entry (trigger_mode == "ml"). Holds the trained model
+    # plus runtime knobs: { enabled, timeframe, threshold, model: {...} }
+    ml: dict = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Optional[dict]) -> "EntryConfig":
@@ -89,6 +93,7 @@ class EntryManager:
         self._ind_calc_ts: float = 0.0
         self._ind_cached: Optional[tuple[str, str]] = None
         self._last_signals: dict[str, Optional[str]] = {}
+        self._last_ml_proba: Optional[float] = None
 
     @property
     def account_id(self) -> str:
@@ -127,6 +132,9 @@ class EntryManager:
             "last_ask": self._last_ask,
             "last_bid": self._last_bid,
             "indicator_signals": dict(self._last_signals),
+            "ml_proba": self._last_ml_proba,
+            "ml_trained_at": (cfg.ml or {}).get("model", {}).get("trained_at"),
+            "ml_accuracy": (cfg.ml or {}).get("model", {}).get("accuracy"),
         }
 
     async def evaluate(self, symbol: str, bid: float, ask: float, point: float) -> None:
@@ -150,8 +158,14 @@ class EntryManager:
             return
 
         side = cfg.side
-        if (cfg.trigger_mode or "").lower() == "indicators":
+        mode = (cfg.trigger_mode or "").lower()
+        if mode == "indicators":
             res = await self._indicator_signal(cfg, symbol)
+            if not res:
+                return
+            side, reason = res
+        elif mode == "ml":
+            res = await self._ml_signal(cfg, symbol)
             if not res:
                 return
             side, reason = res
@@ -316,6 +330,36 @@ class EntryManager:
         if allowed in ("BUY", "SELL") and side != allowed:
             return None
         reason = f"Chỉ báo [{logic}] {', '.join(fired)} — {side}"
+        self._ind_cached = (side, reason)
+        return self._ind_cached
+
+    async def _ml_signal(self, cfg: EntryConfig, symbol: str) -> Optional[tuple[str, str]]:
+        """Evaluate the trained ML model on the latest bars. Throttled like
+        the indicator path. Returns (side, reason) or None."""
+        now = time.monotonic()
+        if now - self._ind_calc_ts < INDICATOR_THROTTLE_S:
+            return self._ind_cached
+        self._ind_calc_ts = now
+        self._ind_cached = None
+        self._last_ml_proba = None
+
+        ml_cfg = cfg.ml or {}
+        model = ml_cfg.get("model")
+        if not ml_cfg.get("enabled") or not model:
+            return None
+
+        tf = ml_cfg.get("timeframe") or model.get("timeframe") or "H1"
+        threshold = float(ml_cfg.get("threshold", 0.58))
+        bars = await self._get_bars(symbol, tf)
+        if len(bars) < 30:
+            return None
+
+        proba = ml_entry.predict_proba(bars, model)
+        self._last_ml_proba = proba
+        side = ml_entry.predict_signal(bars, model, threshold, cfg.side)
+        if side is None:
+            return None
+        reason = f"ML p(up)={proba:.2f} ngưỡng {threshold:.2f} — {side}"
         self._ind_cached = (side, reason)
         return self._ind_cached
 
