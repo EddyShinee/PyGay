@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "MetaTrader Dashboard (web + socket bridge)",
+      "runtimeExecutable": "python/.venv/bin/python3",
+      "runtimeArgs": ["python/main.py"],
+      "port": 8000
+    }
+  ]
+}

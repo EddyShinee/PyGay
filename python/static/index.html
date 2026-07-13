@@ -174,6 +174,7 @@
     border-radius: var(--radius-sm);
     padding: 9px 12px;
     font-size: 13px;
+    max-width: 100%;
     transition: border-color .15s, box-shadow .15s;
   }
   input:focus, select:focus {
@@ -217,9 +218,9 @@
   #summary b { color: var(--text); }
   .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5);
                      align-items: center; justify-content: center; z-index: 10; }
-  .modal-backdrop.open { display: flex; }
+  .modal-backdrop.open { display: flex; padding: 16px; }
   .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-           padding: 20px; width: 420px; max-width: 92vw; }
+           padding: 20px; width: 420px; max-width: 100%; max-height: 90vh; overflow-y: auto; }
   .modal h2 { margin: 0 0 14px; font-size: 15px; }
   .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
@@ -444,11 +445,79 @@
   .accounts-panel { padding: 20px; }
   .accounts-panel:has(.accounts-list:not(:empty)) { padding-top: 20px; }
 
+  /* ---------- Mobile ---------- */
+
+  /* Dense tables (positions/insights) become stacked cards instead of a
+     tiny horizontally-scrolled grid - each <td> shows its own label (from
+     data-label, set in JS) with the value beside it. */
+  @media (max-width: 780px) {
+    table.responsive-table thead { display: none; }
+    table.responsive-table, table.responsive-table tbody,
+    table.responsive-table tr, table.responsive-table td { display: block; width: 100%; }
+    table.responsive-table tr {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      margin-bottom: 10px;
+      background: rgba(255,255,255,.02);
+    }
+    table.responsive-table td {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 0;
+      border-bottom: 1px solid var(--border);
+      white-space: normal;
+      text-align: right;
+    }
+    table.responsive-table td:last-child { border-bottom: none; }
+    table.responsive-table td::before {
+      content: attr(data-label);
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--muted);
+      text-align: left;
+      flex-shrink: 0;
+      margin-right: 10px;
+    }
+    /* Cells holding inputs/buttons (edit SL/TP, close) read better as a
+       label on top with full-width controls below, not squeezed to the right. */
+    table.responsive-table td:has(button),
+    table.responsive-table td:has(input) {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 6px;
+    }
+    table.responsive-table .sltp-input { width: 100%; }
+  }
+
+  @media (max-width: 640px) {
+    .tab-bar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .tab-bar::-webkit-scrollbar { display: none; }
+    .tab-btn { flex-shrink: 0; }
+    .tab-actions button, .toolbar > button { flex: 1 1 130px; }
+  }
+
   @media (max-width: 560px) {
-    main, header { padding-left: 16px; padding-right: 16px; }
+    main, header, .detail-header { padding-left: 16px; padding-right: 16px; }
+    header {
+      flex-wrap: wrap;
+      row-gap: 8px;
+      padding-top: 12px;
+      padding-bottom: 12px;
+    }
+    header h1 { font-size: 15px; white-space: nowrap; }
+    header > div { flex-shrink: 0; }
     .link-grid { grid-template-columns: 1fr; }
     .link-port { grid-column: 1; }
     .accounts-list { grid-template-columns: 1fr; }
+    .form-grid { grid-template-columns: 1fr; }
+    .panel { padding: 14px; }
+    .stat-grid { grid-template-columns: repeat(2, 1fr); }
+    button { padding: 11px 16px; }
+    #summary { flex-wrap: wrap; row-gap: 8px; }
+    #toast { left: 16px; right: 16px; max-width: none; }
   }
 </style>
 </head>
@@ -517,7 +586,7 @@
               <span>Magic Number</span>
               <input id="magicInput" type="number" step="1" style="width:180px" />
             </label>
-            <button class="secondary needs-connection" onclick="saveMagic()">Lưu</button>
+            <button class="secondary needs-connection" onclick="withButtonLoading(this, saveMagic)">Lưu</button>
           </div>
           <div class="tab-hint" id="magicCurrent"></div>
         </div>
@@ -535,23 +604,23 @@
               <span>Lot</span>
               <input id="q_lot" type="number" step="0.01" min="0.01" value="0.01" style="width:80px" />
             </label>
-            <button class="buy-btn needs-connection" onclick="quickOrder('BUY')">BUY</button>
-            <button class="sell-btn needs-connection" onclick="quickOrder('SELL')">SELL</button>
+            <button class="buy-btn needs-connection" onclick="withButtonLoading(this, () => quickOrder('BUY'))">BUY</button>
+            <button class="sell-btn needs-connection" onclick="withButtonLoading(this, () => quickOrder('SELL'))">SELL</button>
           </div>
         </div>
         <div class="tab-section">
           <div class="tab-section-title">Quản lý</div>
           <div class="tab-actions">
             <button class="needs-connection" onclick="openOrderModal()">+ Thêm lệnh</button>
-            <button class="secondary needs-connection" onclick="refreshPositions()">Làm mới</button>
+            <button class="secondary needs-connection" onclick="withButtonLoading(this, refreshPositions)">Làm mới</button>
           </div>
         </div>
         <div class="tab-section">
           <div class="tab-section-title">Đóng hàng loạt</div>
           <div class="tab-actions danger-zone">
-            <button class="secondary needs-connection" onclick="closeAll('profit')">Đóng tất cả lệnh lãi</button>
-            <button class="secondary needs-connection" onclick="closeAll('loss')">Đóng tất cả lệnh lỗ</button>
-            <button class="danger needs-connection" onclick="closeAll('all')">Đóng tất cả</button>
+            <button class="secondary needs-connection" onclick="withButtonLoading(this, () => closeAll('profit'))">Đóng tất cả lệnh lãi</button>
+            <button class="secondary needs-connection" onclick="withButtonLoading(this, () => closeAll('loss'))">Đóng tất cả lệnh lỗ</button>
+            <button class="danger needs-connection" onclick="withButtonLoading(this, () => closeAll('all'))">Đóng tất cả</button>
           </div>
         </div>
         <div class="tab-section">
@@ -561,7 +630,7 @@
             <div class="tab-inline">
               <select id="thresholdOp" style="width:58px"><option value=">=">&ge;</option><option value="<=">&le;</option></select>
               <input id="thresholdAmount" type="number" step="0.01" placeholder="USD" style="width:100px" />
-              <button class="secondary needs-connection" onclick="closeByThreshold()">Kiểm tra &amp; đóng</button>
+              <button class="secondary needs-connection" onclick="withButtonLoading(this, closeByThreshold)">Kiểm tra &amp; đóng</button>
             </div>
           </label>
         </div>
@@ -579,9 +648,9 @@
               <span>Chat ID</span>
               <input id="telegramChatId" type="text" placeholder="123456789" style="width:130px" />
             </label>
-            <button class="secondary" onclick="saveTelegram()">Lưu</button>
-            <button class="secondary" onclick="testTelegram()">Test</button>
-            <button type="button" class="danger" id="telegramDisconnectBtn" onclick="disconnectTelegram()" style="display:none">Gỡ Telegram</button>
+            <button class="secondary" onclick="withButtonLoading(this, saveTelegram)">Lưu</button>
+            <button class="secondary" onclick="withButtonLoading(this, testTelegram)">Test</button>
+            <button type="button" class="danger" id="telegramDisconnectBtn" onclick="withButtonLoading(this, disconnectTelegram)" style="display:none">Gỡ Telegram</button>
           </div>
           <div class="tab-hint" id="telegramStatus"></div>
         </div>
@@ -610,7 +679,7 @@
         <input id="ticketFilter" type="text" placeholder="Lọc theo ticket..." style="width:160px" oninput="renderPositions()" />
       </div>
       <div style="overflow-x:auto; margin-top:10px">
-        <table>
+        <table class="responsive-table">
           <thead>
             <tr>
               <th>Ticket</th><th>Symbol</th><th>Volume</th>
@@ -641,7 +710,7 @@
         <span id="summaryLine" style="font-size:12px;color:var(--muted)"></span>
       </div>
       <div style="overflow-x:auto; margin-top:10px">
-        <table>
+        <table class="responsive-table">
           <thead>
             <tr>
               <th>Thời gian</th>
@@ -686,7 +755,7 @@
     </div>
     <div class="modal-actions">
       <button type="button" class="ghost" onclick="closeLinkModal()">Hủy</button>
-      <button type="button" id="linkSubmitBtn" onclick="submitLinkForm()">Thêm mới</button>
+      <button type="button" id="linkSubmitBtn" onclick="withButtonLoading(this, submitLinkForm)">Thêm mới</button>
     </div>
   </div>
 </div>
@@ -738,7 +807,7 @@
     </div>
     <div class="modal-actions">
       <button class="ghost" onclick="closeOrderModal()">Hủy</button>
-      <button onclick="submitOrder()">Đặt lệnh</button>
+      <button onclick="withButtonLoading(this, submitOrder)">Đặt lệnh</button>
     </div>
   </div>
 </div>
@@ -769,6 +838,45 @@ function toast(msg, isError) {
   el.className = 'show' + (isError ? ' error' : '');
   clearTimeout(toast._t);
   toast._t = setTimeout(() => el.classList.remove('show'), 4000);
+}
+
+/* ---------- Prevent double-clicks: disable a button while its action is
+   in flight, restore it (success or error) when done. ---------- */
+
+// For buttons that live permanently in the DOM (control panel, modals) -
+// safe to mutate the element directly, nothing else re-renders it.
+async function withButtonLoading(btn, fn) {
+  if (!btn || btn.disabled) return;
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.dataset.loading = 'true';
+  btn.textContent = '...';
+  try {
+    await fn();
+  } finally {
+    delete btn.dataset.loading;
+    btn.textContent = original;
+    btn.disabled = btn.classList.contains('needs-connection') ? !currentAccountConnected : false;
+  }
+}
+
+// For buttons inside lists that get fully re-rendered on every WebSocket
+// push (positions table, pending-accounts list) - a direct DOM mutation
+// would just get discarded by the next render. Track in-flight keys in a
+// Set instead; the render functions check isPending() on every row so the
+// loading state survives re-renders until the action actually finishes.
+const pendingActions = new Set();
+function isPending(key) { return pendingActions.has(key); }
+async function runPending(key, fn, rerender) {
+  if (pendingActions.has(key)) return;
+  pendingActions.add(key);
+  rerender();
+  try {
+    await fn();
+  } finally {
+    pendingActions.delete(key);
+    rerender();
+  }
 }
 
 function switchControlTab(tab) {
@@ -868,7 +976,10 @@ function updateDetailHeader() {
 }
 
 function updateActionAvailability() {
-  document.querySelectorAll('.needs-connection').forEach(el => { el.disabled = !currentAccountConnected; });
+  document.querySelectorAll('.needs-connection').forEach(el => {
+    if (el.dataset.loading === 'true') return; // don't fight an in-flight action's own state
+    el.disabled = !currentAccountConnected;
+  });
   renderPositions();
 }
 
@@ -916,7 +1027,7 @@ async function loadPendingAccounts() {
           <div><strong>#${a.account_id}</strong> ${a.name || ''}</div>
           <div class="pending-meta">${a.broker || 'EA đang online'}</div>
         </div>
-        <button type="button" onclick="linkAccountDiscovered('${a.account_id}')">Gắn với tài khoản của tôi</button>
+        <button type="button" onclick="runPending('link:${a.account_id}', () => linkAccountDiscovered('${a.account_id}'), loadPendingAccounts)" ${isPending('link:' + a.account_id) ? 'disabled' : ''}>${isPending('link:' + a.account_id) ? '...' : 'Gắn với tài khoản của tôi'}</button>
       </div>
     `).join('');
     if (banner && bannerText && currentAccountId === null) {
@@ -1160,24 +1271,30 @@ function renderPositions() {
 
   emptyEl.style.display = rows.length ? 'none' : 'block';
   const dis = currentAccountConnected ? '' : 'disabled';
-  bodyEl.innerHTML = rows.map(p => `
+  bodyEl.innerHTML = rows.map(p => {
+    const modifyBusy = isPending('modify:' + p.ticket);
+    const closeBusy = isPending('close:' + p.ticket);
+    const modifyDis = dis || (modifyBusy ? 'disabled' : '');
+    const closeDis = dis || (closeBusy ? 'disabled' : '');
+    return `
     <tr data-ticket="${p.ticket}">
-      <td>${p.ticket}</td>
-      <td><span class="${p.side === 'BUY' ? 'buy' : 'sell'}">${p.side}</span> ${p.symbol}</td>
-      <td>${fmt(p.volume, 2)}</td>
-      <td>${fmt(p.price_open, 5)}</td>
-      <td>${fmtTime(p.time_open)}</td>
-      <td>${fmt(p.sl, 5)}</td>
-      <td>${fmt(p.tp, 5)}</td>
-      <td class="${p.profit >= 0 ? 'profit-pos' : 'profit-neg'}">${fmt(p.profit + p.swap)}</td>
-      <td>
-        <input class="sltp-input" type="number" step="0.00001" value="${p.sl || ''}" placeholder="SL" data-field="sl" ${dis} />
-        <input class="sltp-input" type="number" step="0.00001" value="${p.tp || ''}" placeholder="TP" data-field="tp" ${dis} />
-        <button class="secondary" onclick="modifyPosition(${p.ticket})" ${dis}>Lưu</button>
+      <td data-label="Ticket">${p.ticket}</td>
+      <td data-label="Symbol"><span class="${p.side === 'BUY' ? 'buy' : 'sell'}">${p.side}</span> ${p.symbol}</td>
+      <td data-label="Volume">${fmt(p.volume, 2)}</td>
+      <td data-label="Giá vào">${fmt(p.price_open, 5)}</td>
+      <td data-label="Thời gian">${fmtTime(p.time_open)}</td>
+      <td data-label="SL">${fmt(p.sl, 5)}</td>
+      <td data-label="TP">${fmt(p.tp, 5)}</td>
+      <td data-label="Profit" class="${p.profit >= 0 ? 'profit-pos' : 'profit-neg'}">${fmt(p.profit + p.swap)}</td>
+      <td data-label="Sửa SL/TP">
+        <input class="sltp-input" type="number" step="0.00001" value="${p.sl || ''}" placeholder="SL" data-field="sl" ${modifyDis} />
+        <input class="sltp-input" type="number" step="0.00001" value="${p.tp || ''}" placeholder="TP" data-field="tp" ${modifyDis} />
+        <button class="secondary" onclick="handleModifyPosition(${p.ticket})" ${modifyDis}>${modifyBusy ? '...' : 'Lưu'}</button>
       </td>
-      <td><button class="danger" onclick="closePosition(${p.ticket})" ${dis}>Đóng</button></td>
+      <td data-label="Thao tác"><button class="danger" onclick="runPending('close:${p.ticket}', () => closePosition(${p.ticket}), renderPositions)" ${closeDis}>${closeBusy ? '...' : 'Đóng'}</button></td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
 }
 
 async function closePosition(ticket) {
@@ -1187,10 +1304,14 @@ async function closePosition(ticket) {
   } catch (e) { toast(e.message, true); }
 }
 
-async function modifyPosition(ticket) {
+function handleModifyPosition(ticket) {
   const row = document.querySelector(`tr[data-ticket="${ticket}"]`);
   const sl = parseFloat(row.querySelector('[data-field="sl"]').value) || 0;
   const tp = parseFloat(row.querySelector('[data-field="tp"]').value) || 0;
+  runPending('modify:' + ticket, () => modifyPosition(ticket, sl, tp), renderPositions);
+}
+
+async function modifyPosition(ticket, sl, tp) {
   try {
     await api(`/api/${currentAccountId}/positions/${ticket}/modify`, 'POST', {sl, tp});
     toast(`Đã cập nhật SL/TP #${ticket}`);
@@ -1435,12 +1556,12 @@ function renderInsights(rows) {
     const total = (buy.profit || 0) + (sell.profit || 0);
     return `
       <tr>
-        <td>${period}</td>
-        <td class="buy">${buy.trades || 0}</td>
-        <td>${profitBar(buy.profit || 0, maxAbs, 'BUY')}</td>
-        <td class="sell">${sell.trades || 0}</td>
-        <td>${profitBar(sell.profit || 0, maxAbs, 'SELL')}</td>
-        <td class="${total >= 0 ? 'profit-pos' : 'profit-neg'}">${fmt(total)}</td>
+        <td data-label="Thời gian">${period}</td>
+        <td data-label="BUY (lệnh)" class="buy">${buy.trades || 0}</td>
+        <td data-label="BUY lãi/lỗ">${profitBar(buy.profit || 0, maxAbs, 'BUY')}</td>
+        <td data-label="SELL (lệnh)" class="sell">${sell.trades || 0}</td>
+        <td data-label="SELL lãi/lỗ">${profitBar(sell.profit || 0, maxAbs, 'SELL')}</td>
+        <td data-label="Tổng" class="${total >= 0 ? 'profit-pos' : 'profit-neg'}">${fmt(total)}</td>
       </tr>`;
   }).join('');
 }
