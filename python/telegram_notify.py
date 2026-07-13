@@ -113,6 +113,14 @@ def format_risk_triggered(account_id: str, reason: str, detail: str = "") -> str
     return "\n".join(lines)
 
 
+def format_manage_action(account_id: str, action: str, detail: str) -> str:
+    return "\n".join([
+        f"⚙️ Quản lý lệnh — {action}",
+        detail,
+        f"#{account_id}",
+    ])
+
+
 def format_entry_triggered(
     account_id: str, side: str, symbol: str, volume: float, reason: str
 ) -> str:

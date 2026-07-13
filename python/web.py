@@ -24,6 +24,7 @@ from session_manager import SessionManager, AccountSession
 import account_links
 import account_risk
 import account_entry
+import account_manage
 import ml_entry
 import auth
 import history
@@ -163,6 +164,49 @@ class MLTrainRequest(BaseModel):
     lags: int = 5
     threshold: float = 0.58
     epochs: int = 400
+
+
+class ManageConfigRequest(BaseModel):
+    enabled: bool = False
+    manage_magic: int = 0
+    symbols: list[str] = []
+    sltp_unit: Literal["points", "pips"] = "points"
+    max_positions_per_basket: int = 10
+    max_total_lot: float = 1.0
+    max_lot_per_order: float = 1.0
+    add_cooldown_seconds: float = 5.0
+    # basket close
+    basket_enabled: bool = False
+    basket_tp_money: Optional[float] = None
+    basket_sl_money: Optional[float] = None
+    basket_tp_points: Optional[float] = None
+    basket_sl_points: Optional[float] = None
+    # DCA / Martingale
+    dca_enabled: bool = False
+    dca_step_points: float = 200.0
+    dca_lot_mode: Literal["multiply", "add", "none"] = "multiply"
+    dca_lot_value: float = 2.0
+    dca_max_steps: int = 5
+    # Grid
+    grid_enabled: bool = False
+    grid_step_points: float = 300.0
+    grid_lot_mode: Literal["none", "add", "multiply"] = "none"
+    grid_lot_value: float = 0.0
+    grid_max_levels: int = 5
+    # Pyramiding
+    pyr_enabled: bool = False
+    pyr_step_points: float = 200.0
+    pyr_lot_mode: Literal["none", "add", "multiply"] = "none"
+    pyr_lot_value: float = 0.0
+    pyr_max_steps: int = 3
+    pyr_trail_points: float = 0.0
+    # Hedge
+    hedge_enabled: bool = False
+    hedge_dd_money: Optional[float] = None
+    hedge_dd_points: Optional[float] = None
+    hedge_lot_ratio: float = 1.0
+    hedge_max_orders: int = 1
+    hedge_step_points: float = 0.0
 
 
 class RegisterRequest(BaseModel):
@@ -688,6 +732,60 @@ def create_app(sessions: SessionManager) -> FastAPI:
         session = sessions.get(account_id)
         if session is not None:
             await session.entry_manager.reload_config()
+        return {"ok": True, "removed": removed}
+
+    @protected.get("/api/{account_id}/manage")
+    async def get_manage(account_id: str, request: Request):
+        require_account_access(request, account_id)
+        try:
+            row = await asyncio.to_thread(account_manage.get_manage_config, account_id)
+        except account_manage.ManageConfigError as exc:
+            raise HTTPException(500, str(exc))
+        except account_manage.ManageUnavailable as exc:
+            raise HTTPException(503, str(exc))
+        session = sessions.get(account_id)
+        status = session.position_manager.status() if session else {"enabled": False}
+        if row is None:
+            return {"configured": False, "config": {}, "status": status}
+        return {
+            "configured": True,
+            "enabled": row["enabled"],
+            "config": row["config"],
+            "updated_at": row["updated_at"],
+            "status": status,
+        }
+
+    @protected.post("/api/{account_id}/manage")
+    async def set_manage(account_id: str, req: ManageConfigRequest, request: Request):
+        require_account_access(request, account_id)
+        config = req.model_dump()
+        enabled = bool(config.pop("enabled", False))
+        try:
+            await asyncio.to_thread(account_manage.set_manage_config, account_id, enabled, config)
+        except account_manage.ManageConfigError as exc:
+            raise HTTPException(400, str(exc))
+        except account_manage.ManageUnavailable as exc:
+            raise HTTPException(503, str(exc))
+        session = sessions.get(account_id)
+        if session is not None:
+            await session.position_manager.reload_config()
+            status = session.position_manager.status()
+        else:
+            status = {"enabled": enabled}
+        return {"ok": True, "status": status}
+
+    @protected.delete("/api/{account_id}/manage")
+    async def delete_manage(account_id: str, request: Request):
+        require_account_access(request, account_id)
+        try:
+            removed = await asyncio.to_thread(account_manage.clear_manage_config, account_id)
+        except account_manage.ManageConfigError as exc:
+            raise HTTPException(500, str(exc))
+        except account_manage.ManageUnavailable as exc:
+            raise HTTPException(503, str(exc))
+        session = sessions.get(account_id)
+        if session is not None:
+            await session.position_manager.reload_config()
         return {"ok": True, "removed": removed}
 
     @protected.post("/api/{account_id}/entry/ml/train")

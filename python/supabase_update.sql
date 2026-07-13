@@ -10,6 +10,7 @@
 --   v3 — socket_host / socket_port per linked account + update_account_socket
 --   v5 — account_risk_config (cấu hình RiskManager SL/TP tự động theo account)
 --   v6 — account_entry_config (cấu hình EntryManager vào lệnh tự động theo account)
+--   v7 — account_manage_config (cấu hình PositionManager: DCA/Grid/Martingale...)
 --
 -- =============================================================================
 
@@ -501,3 +502,104 @@ revoke all on function public.delete_account_entry(text) from public;
 grant execute on function public.get_account_entry(text) to anon, authenticated, service_role;
 grant execute on function public.upsert_account_entry(text, boolean, jsonb) to anon, authenticated, service_role;
 grant execute on function public.delete_account_entry(text) to anon, authenticated, service_role;
+
+
+-- =============================================================================
+-- v7 — account_manage_config (cấu hình PositionManager: DCA/Grid/Martingale/
+--      Pyramiding/Hedge + chốt cả rổ, tự động quản lý lệnh theo từng account)
+-- =============================================================================
+
+create table if not exists public.account_manage_config (
+  account_id text primary key,
+  enabled boolean not null default false,
+  config jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.account_manage_config enable row level security;
+
+revoke all on table public.account_manage_config from anon, authenticated;
+grant all on table public.account_manage_config to postgres, service_role;
+
+create or replace function public.get_account_manage(p_account_id text)
+returns json
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  r public.account_manage_config%rowtype;
+begin
+  select * into r
+  from public.account_manage_config
+  where account_id = trim(p_account_id);
+  if not found then
+    return null;
+  end if;
+  return json_build_object(
+    'account_id', r.account_id,
+    'enabled', r.enabled,
+    'config', r.config,
+    'updated_at', extract(epoch from r.updated_at)::bigint
+  );
+end;
+$$;
+
+create or replace function public.upsert_account_manage(
+  p_account_id text,
+  p_enabled boolean,
+  p_config jsonb
+)
+returns json
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  aid text := trim(p_account_id);
+  saved public.account_manage_config%rowtype;
+begin
+  if aid is null or aid !~ '^[0-9]{5,12}$' then
+    raise exception 'INVALID_ACCOUNT_ID';
+  end if;
+
+  insert into public.account_manage_config (account_id, enabled, config, updated_at)
+  values (aid, coalesce(p_enabled, false), coalesce(p_config, '{}'::jsonb), now())
+  on conflict (account_id) do update set
+    enabled = excluded.enabled,
+    config = excluded.config,
+    updated_at = now()
+  returning * into saved;
+
+  return json_build_object(
+    'account_id', saved.account_id,
+    'enabled', saved.enabled,
+    'config', saved.config,
+    'updated_at', extract(epoch from saved.updated_at)::bigint
+  );
+end;
+$$;
+
+create or replace function public.delete_account_manage(p_account_id text)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  deleted int;
+begin
+  delete from public.account_manage_config
+  where account_id = trim(p_account_id);
+  get diagnostics deleted = row_count;
+  return deleted > 0;
+end;
+$$;
+
+revoke all on function public.get_account_manage(text) from public;
+revoke all on function public.upsert_account_manage(text, boolean, jsonb) from public;
+revoke all on function public.delete_account_manage(text) from public;
+
+grant execute on function public.get_account_manage(text) to anon, authenticated, service_role;
+grant execute on function public.upsert_account_manage(text, boolean, jsonb) to anon, authenticated, service_role;
+grant execute on function public.delete_account_manage(text) to anon, authenticated, service_role;

@@ -627,10 +627,19 @@
     button { padding: 12px 16px; min-height: 44px; }
 
     /* Control-panel fields: stack full width so nothing is cramped.
-       Inline width:XXXpx on the elements is overridden here. */
+       Inline width:XXXpx / flex:X on the elements is overridden here.
+       flex:0 0 auto is critical: when a .tab-row switches to a column,
+       an inline flex-basis (e.g. "flex:1 1 220px") would otherwise be read
+       as a 220px *height* and blow up the layout. */
     .tab-fields, .tab-row { flex-direction: column; align-items: stretch; gap: 10px; }
-    .tab-field { width: 100%; min-width: 0; }
-    .tab-field input, .tab-field select { width: 100% !important; }
+    .tab-field { width: 100% !important; min-width: 0; flex: 0 0 auto !important; }
+    .tab-field input:not([type=checkbox]):not([type=radio]),
+    .tab-field select { width: 100% !important; }
+    /* Checkbox/toggle rows: keep the box compact, let the label wrap. */
+    .tab-field input[type=checkbox], .tab-field input[type=radio] {
+      width: auto !important; flex: 0 0 auto; margin: 0;
+    }
+    .tab-field > span { white-space: normal; }
     .tab-row > button { width: 100%; }
     .tab-inline { width: 100%; }
     .tab-inline > * { flex: 1 1 auto; }
@@ -704,6 +713,7 @@
         <button type="button" class="tab-btn control-tab-btn" data-tab="general" onclick="switchControlTab('general')">Chung</button>
         <button type="button" class="tab-btn control-tab-btn active" data-tab="trade" onclick="switchControlTab('trade')">Giao dịch</button>
         <button type="button" class="tab-btn control-tab-btn" data-tab="entry" onclick="switchControlTab('entry')">Vào lệnh</button>
+        <button type="button" class="tab-btn control-tab-btn" data-tab="manage" onclick="switchControlTab('manage')">Quản lý lệnh</button>
         <button type="button" class="tab-btn control-tab-btn" data-tab="telegram" onclick="switchControlTab('telegram')">Telegram</button>
         <button type="button" class="tab-btn control-tab-btn" data-tab="risk" onclick="switchControlTab('risk')">Rủi ro</button>
       </div>
@@ -917,6 +927,127 @@
           <button class="danger" onclick="withButtonLoading(this, clearEntryConfig)">Xóa cấu hình</button>
         </div>
         <p class="tab-hint">EntryManager chạy nền khi EA online. Kích hoạt theo tick giá hoặc vòng lặp nền (lịch/interval).</p>
+      </div>
+
+      <div class="control-tab-panel" data-tab="manage">
+        <details class="tab-group" open>
+          <summary>Trạng thái & Bật/tắt</summary>
+          <div class="tab-group-body">
+            <p class="tab-hint" style="margin-top:0" id="manageStatusLine">Chưa tải cấu hình</p>
+            <label class="tab-field" style="flex-direction:row;align-items:center;gap:8px;margin-top:10px">
+              <input type="checkbox" id="mngEnabled" />
+              <span>Bật quản lý lệnh tự động cho tài khoản này</span>
+            </label>
+            <p class="tab-hint">Quản lý theo <b>rổ</b> (nhóm theo symbol + chiều). Chỉ đụng lệnh mang đúng magic của hệ thống, bỏ qua lệnh vào tay. Cần có lệnh mồi (từ Vào lệnh hoặc mở tay) để bắt đầu một rổ.</p>
+          </div>
+        </details>
+        <details class="tab-group" open>
+          <summary>Chung & An toàn</summary>
+          <div class="tab-group-body">
+            <div class="tab-row">
+              <label class="tab-field"><span>Magic quản lý (0 = magic EA hiện tại)</span><input id="mngMagic" type="number" step="1" value="0" /></label>
+              <label class="tab-field" style="flex:1 1 220px"><span>Symbols (để trống = mọi symbol có lệnh)</span><input id="mngSymbols" type="text" placeholder="XAUUSD, EURUSD" /></label>
+              <label class="tab-field"><span>Đơn vị khoảng cách</span>
+                <select id="mngUnit"><option value="points">Points</option><option value="pips">Pips (=10 points)</option></select>
+              </label>
+            </div>
+            <div class="tab-row">
+              <label class="tab-field"><span>Max lệnh / rổ</span><input id="mngMaxPos" type="number" step="1" value="10" /></label>
+              <label class="tab-field"><span>Max tổng lot / rổ</span><input id="mngMaxTotalLot" type="number" step="0.01" value="1.0" /></label>
+              <label class="tab-field"><span>Max lot mỗi lệnh thêm</span><input id="mngMaxLotOrder" type="number" step="0.01" value="1.0" /></label>
+              <label class="tab-field"><span>Cooldown thêm lệnh (giây)</span><input id="mngCooldown" type="number" step="1" value="5" /></label>
+            </div>
+          </div>
+        </details>
+        <details class="tab-group" open>
+          <summary>Chốt / cắt cả rổ (Basket TP/SL) <span class="group-badge" id="mngBadgeBasket"></span></summary>
+          <div class="tab-group-body">
+            <label class="tab-field" style="flex-direction:row;align-items:center;gap:8px">
+              <input type="checkbox" id="mngBasketEnabled" /><span>Bật chốt/cắt cả rổ</span>
+            </label>
+            <div class="tab-row" style="margin-top:8px">
+              <label class="tab-field"><span>TP tổng ($)</span><input id="mngBasketTpMoney" type="number" step="0.01" placeholder="vd 10" /></label>
+              <label class="tab-field"><span>SL tổng ($)</span><input id="mngBasketSlMoney" type="number" step="0.01" placeholder="vd 50" /></label>
+              <label class="tab-field"><span>TP theo points (giá TB)</span><input id="mngBasketTpPoints" type="number" step="1" /></label>
+              <label class="tab-field"><span>SL theo points (giá TB)</span><input id="mngBasketSlPoints" type="number" step="1" /></label>
+            </div>
+            <p class="tab-hint">Đóng toàn bộ rổ khi tổng lời/lỗ chạm bất kỳ ngưỡng nào được đặt (bỏ trống = tắt ngưỡng đó).</p>
+          </div>
+        </details>
+        <details class="tab-group">
+          <summary>DCA / Martingale (nhồi khi lỗ) <span class="group-badge" id="mngBadgeDca"></span></summary>
+          <div class="tab-group-body">
+            <label class="tab-field" style="flex-direction:row;align-items:center;gap:8px">
+              <input type="checkbox" id="mngDcaEnabled" /><span>Bật DCA/Martingale</span>
+            </label>
+            <div class="tab-row" style="margin-top:8px">
+              <label class="tab-field"><span>Bước giá ngược (points)</span><input id="mngDcaStep" type="number" step="1" value="200" /></label>
+              <label class="tab-field"><span>Kiểu tăng lot</span>
+                <select id="mngDcaLotMode"><option value="multiply">Nhân (×)</option><option value="add">Cộng (+)</option><option value="none">Giữ nguyên</option></select>
+              </label>
+              <label class="tab-field"><span>Giá trị lot</span><input id="mngDcaLotValue" type="number" step="0.01" value="2" /></label>
+              <label class="tab-field"><span>Số bước tối đa</span><input id="mngDcaMaxSteps" type="number" step="1" value="5" /></label>
+            </div>
+            <p class="tab-hint">Khi rổ đang lỗ và giá đi ngược ≥ bước, thêm lệnh cùng chiều với lot nhân/cộng. Đóng rổ bằng Basket TP ở trên.</p>
+          </div>
+        </details>
+        <details class="tab-group">
+          <summary>Grid (rải lệnh đều) <span class="group-badge" id="mngBadgeGrid"></span></summary>
+          <div class="tab-group-body">
+            <label class="tab-field" style="flex-direction:row;align-items:center;gap:8px">
+              <input type="checkbox" id="mngGridEnabled" /><span>Bật Grid</span>
+            </label>
+            <div class="tab-row" style="margin-top:8px">
+              <label class="tab-field"><span>Bước lưới (points)</span><input id="mngGridStep" type="number" step="1" value="300" /></label>
+              <label class="tab-field"><span>Kiểu lot</span>
+                <select id="mngGridLotMode"><option value="none">Giữ nguyên</option><option value="add">Cộng (+)</option><option value="multiply">Nhân (×)</option></select>
+              </label>
+              <label class="tab-field"><span>Giá trị lot</span><input id="mngGridLotValue" type="number" step="0.01" value="0" /></label>
+              <label class="tab-field"><span>Số tầng tối đa</span><input id="mngGridMaxLevels" type="number" step="1" value="5" /></label>
+            </div>
+            <p class="tab-hint">Thêm lệnh cùng chiều mỗi khi giá đi ngược thêm 1 bước lưới (không phụ thuộc lời/lỗ).</p>
+          </div>
+        </details>
+        <details class="tab-group">
+          <summary>Pyramiding (nhồi khi lời) <span class="group-badge" id="mngBadgePyr"></span></summary>
+          <div class="tab-group-body">
+            <label class="tab-field" style="flex-direction:row;align-items:center;gap:8px">
+              <input type="checkbox" id="mngPyrEnabled" /><span>Bật Pyramiding</span>
+            </label>
+            <div class="tab-row" style="margin-top:8px">
+              <label class="tab-field"><span>Bước giá thuận (points)</span><input id="mngPyrStep" type="number" step="1" value="200" /></label>
+              <label class="tab-field"><span>Kiểu lot</span>
+                <select id="mngPyrLotMode"><option value="none">Giữ nguyên</option><option value="add">Cộng (+)</option><option value="multiply">Nhân (×)</option></select>
+              </label>
+              <label class="tab-field"><span>Giá trị lot</span><input id="mngPyrLotValue" type="number" step="0.01" value="0" /></label>
+              <label class="tab-field"><span>Số bước tối đa</span><input id="mngPyrMaxSteps" type="number" step="1" value="3" /></label>
+              <label class="tab-field"><span>Dời SL bảo vệ (points, 0=tắt)</span><input id="mngPyrTrail" type="number" step="1" value="0" /></label>
+            </div>
+            <p class="tab-hint">Khi rổ đang lời và giá đi thuận ≥ bước, thêm lệnh cùng chiều để "ăn" trend.</p>
+          </div>
+        </details>
+        <details class="tab-group">
+          <summary>Hedge / đối ứng <span class="group-badge" id="mngBadgeHedge"></span></summary>
+          <div class="tab-group-body">
+            <label class="tab-field" style="flex-direction:row;align-items:center;gap:8px">
+              <input type="checkbox" id="mngHedgeEnabled" /><span>Bật Hedge</span>
+            </label>
+            <div class="tab-row" style="margin-top:8px">
+              <label class="tab-field"><span>Kích hoạt khi lỗ ($)</span><input id="mngHedgeDdMoney" type="number" step="0.01" placeholder="vd 30" /></label>
+              <label class="tab-field"><span>Hoặc lỗ (points)</span><input id="mngHedgeDdPoints" type="number" step="1" /></label>
+              <label class="tab-field"><span>Tỷ lệ lot đối ứng (× tổng lot rổ)</span><input id="mngHedgeLotRatio" type="number" step="0.1" value="1" /></label>
+              <label class="tab-field"><span>Số lệnh hedge tối đa</span><input id="mngHedgeMaxOrders" type="number" step="1" min="1" value="1" /></label>
+              <label class="tab-field"><span>Bước thêm hedge (points, 0 = mở hết cùng lúc)</span><input id="mngHedgeStep" type="number" step="1" value="0" /></label>
+            </div>
+            <p class="tab-hint">Khi rổ lỗ sâu, mở lệnh ngược chiều để phòng thủ. Đặt "Số lệnh hedge tối đa" &gt; 1 để mở nhiều; bước = 0 sẽ mở hết cùng lúc, bước &gt; 0 sẽ rải thêm mỗi khi lỗ sâu thêm 1 bước.</p>
+          </div>
+        </details>
+        <div class="tab-actions">
+          <button onclick="withButtonLoading(this, saveManageConfig)">Lưu cấu hình quản lý</button>
+          <button class="secondary" onclick="withButtonLoading(this, loadManageConfig)">Làm mới</button>
+          <button class="danger" onclick="withButtonLoading(this, clearManageConfig)">Xóa cấu hình</button>
+        </div>
+        <p class="tab-hint">⚠️ Các chiến lược nhồi lệnh (DCA/Grid/Martingale) làm tăng rủi ro nhanh. Luôn đặt Max tổng lot, Basket SL và chạy thử tài khoản demo trước.</p>
       </div>
 
       <div class="control-tab-panel" data-tab="telegram">
@@ -1365,6 +1496,7 @@ function showAccount(accountId) {
   loadTelegramStatus();
   loadRiskConfig();
   loadEntryConfig();
+  loadManageConfig();
   updateDetailHeader();
   updateActionAvailability();
 }
@@ -2392,6 +2524,146 @@ async function clearEntryConfig() {
 
 document.getElementById('entrySltpUnit')?.addEventListener('change', updateEntryUnitLabels);
 renderEntryIndicators();
+
+// ============================ PositionManager (Quản lý lệnh) =================
+function collectManageConfig() {
+  return {
+    enabled: document.getElementById('mngEnabled').checked,
+    manage_magic: riskInt('mngMagic') || 0,
+    symbols: (document.getElementById('mngSymbols').value || '')
+      .split(/[,;\s]+/).map(s => s.trim().toUpperCase()).filter(Boolean),
+    sltp_unit: document.getElementById('mngUnit').value,
+    max_positions_per_basket: riskInt('mngMaxPos') || 10,
+    max_total_lot: riskNum('mngMaxTotalLot') ?? 1.0,
+    max_lot_per_order: riskNum('mngMaxLotOrder') ?? 1.0,
+    add_cooldown_seconds: riskNum('mngCooldown') ?? 5,
+    basket_enabled: document.getElementById('mngBasketEnabled').checked,
+    basket_tp_money: riskNum('mngBasketTpMoney'),
+    basket_sl_money: riskNum('mngBasketSlMoney'),
+    basket_tp_points: riskNum('mngBasketTpPoints'),
+    basket_sl_points: riskNum('mngBasketSlPoints'),
+    dca_enabled: document.getElementById('mngDcaEnabled').checked,
+    dca_step_points: riskNum('mngDcaStep') ?? 200,
+    dca_lot_mode: document.getElementById('mngDcaLotMode').value,
+    dca_lot_value: riskNum('mngDcaLotValue') ?? 2,
+    dca_max_steps: riskInt('mngDcaMaxSteps') ?? 5,
+    grid_enabled: document.getElementById('mngGridEnabled').checked,
+    grid_step_points: riskNum('mngGridStep') ?? 300,
+    grid_lot_mode: document.getElementById('mngGridLotMode').value,
+    grid_lot_value: riskNum('mngGridLotValue') ?? 0,
+    grid_max_levels: riskInt('mngGridMaxLevels') ?? 5,
+    pyr_enabled: document.getElementById('mngPyrEnabled').checked,
+    pyr_step_points: riskNum('mngPyrStep') ?? 200,
+    pyr_lot_mode: document.getElementById('mngPyrLotMode').value,
+    pyr_lot_value: riskNum('mngPyrLotValue') ?? 0,
+    pyr_max_steps: riskInt('mngPyrMaxSteps') ?? 3,
+    pyr_trail_points: riskNum('mngPyrTrail') ?? 0,
+    hedge_enabled: document.getElementById('mngHedgeEnabled').checked,
+    hedge_dd_money: riskNum('mngHedgeDdMoney'),
+    hedge_dd_points: riskNum('mngHedgeDdPoints'),
+    hedge_lot_ratio: riskNum('mngHedgeLotRatio') ?? 1,
+    hedge_max_orders: riskInt('mngHedgeMaxOrders') || 1,
+    hedge_step_points: riskNum('mngHedgeStep') ?? 0,
+  };
+}
+
+function applyManageConfig(cfg, enabledFlag) {
+  cfg = cfg || {};
+  document.getElementById('mngEnabled').checked = !!enabledFlag;
+  setRiskField('mngMagic', cfg.manage_magic ?? 0);
+  document.getElementById('mngSymbols').value = (cfg.symbols || []).join(', ');
+  document.getElementById('mngUnit').value = cfg.sltp_unit || 'points';
+  setRiskField('mngMaxPos', cfg.max_positions_per_basket ?? 10);
+  setRiskField('mngMaxTotalLot', cfg.max_total_lot ?? 1.0);
+  setRiskField('mngMaxLotOrder', cfg.max_lot_per_order ?? 1.0);
+  setRiskField('mngCooldown', cfg.add_cooldown_seconds ?? 5);
+  document.getElementById('mngBasketEnabled').checked = !!cfg.basket_enabled;
+  setRiskField('mngBasketTpMoney', cfg.basket_tp_money);
+  setRiskField('mngBasketSlMoney', cfg.basket_sl_money);
+  setRiskField('mngBasketTpPoints', cfg.basket_tp_points);
+  setRiskField('mngBasketSlPoints', cfg.basket_sl_points);
+  document.getElementById('mngDcaEnabled').checked = !!cfg.dca_enabled;
+  setRiskField('mngDcaStep', cfg.dca_step_points ?? 200);
+  document.getElementById('mngDcaLotMode').value = cfg.dca_lot_mode || 'multiply';
+  setRiskField('mngDcaLotValue', cfg.dca_lot_value ?? 2);
+  setRiskField('mngDcaMaxSteps', cfg.dca_max_steps ?? 5);
+  document.getElementById('mngGridEnabled').checked = !!cfg.grid_enabled;
+  setRiskField('mngGridStep', cfg.grid_step_points ?? 300);
+  document.getElementById('mngGridLotMode').value = cfg.grid_lot_mode || 'none';
+  setRiskField('mngGridLotValue', cfg.grid_lot_value ?? 0);
+  setRiskField('mngGridMaxLevels', cfg.grid_max_levels ?? 5);
+  document.getElementById('mngPyrEnabled').checked = !!cfg.pyr_enabled;
+  setRiskField('mngPyrStep', cfg.pyr_step_points ?? 200);
+  document.getElementById('mngPyrLotMode').value = cfg.pyr_lot_mode || 'none';
+  setRiskField('mngPyrLotValue', cfg.pyr_lot_value ?? 0);
+  setRiskField('mngPyrMaxSteps', cfg.pyr_max_steps ?? 3);
+  setRiskField('mngPyrTrail', cfg.pyr_trail_points ?? 0);
+  document.getElementById('mngHedgeEnabled').checked = !!cfg.hedge_enabled;
+  setRiskField('mngHedgeDdMoney', cfg.hedge_dd_money);
+  setRiskField('mngHedgeDdPoints', cfg.hedge_dd_points);
+  setRiskField('mngHedgeLotRatio', cfg.hedge_lot_ratio ?? 1);
+  setRiskField('mngHedgeMaxOrders', cfg.hedge_max_orders ?? 1);
+  setRiskField('mngHedgeStep', cfg.hedge_step_points ?? 0);
+  renderManageBadges();
+}
+
+function renderManageBadges() {
+  const set = (id, on) => { const e = document.getElementById(id); if (e) e.textContent = on ? 'BẬT' : ''; };
+  set('mngBadgeBasket', document.getElementById('mngBasketEnabled').checked);
+  set('mngBadgeDca', document.getElementById('mngDcaEnabled').checked);
+  set('mngBadgeGrid', document.getElementById('mngGridEnabled').checked);
+  set('mngBadgePyr', document.getElementById('mngPyrEnabled').checked);
+  set('mngBadgeHedge', document.getElementById('mngHedgeEnabled').checked);
+}
+
+function renderManageStatus(status) {
+  const el = document.getElementById('manageStatusLine');
+  if (!el || !status) return;
+  const on = status.enabled ? 'BẬT' : 'TẮT';
+  const baskets = status.baskets || [];
+  let line = `${on} · magic ${status.magic ?? 0} · ${baskets.length} rổ`;
+  if (baskets.length) {
+    line += ': ' + baskets.map(b => `${b.symbol} ${b.side} ×${b.count} (${b.pnl}$)`).join(' · ');
+  }
+  if (status.last_trigger) line += ` · gần nhất: ${status.last_trigger}`;
+  el.textContent = line;
+}
+
+async function loadManageConfig() {
+  if (!currentAccountId) return;
+  const accountId = currentAccountId;
+  try {
+    const data = await api(`/api/${accountId}/manage`, 'GET');
+    if (accountId !== currentAccountId) return;
+    applyManageConfig(data.config || {}, data.enabled);
+    renderManageStatus(data.status);
+  } catch (e) { /* best-effort */ }
+}
+
+async function saveManageConfig() {
+  if (!currentAccountId) return;
+  try {
+    const body = collectManageConfig();
+    const data = await api(`/api/${currentAccountId}/manage`, 'POST', body);
+    renderManageBadges();
+    renderManageStatus(data.status);
+    toast('Đã lưu cấu hình quản lý lệnh');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function clearManageConfig() {
+  if (!currentAccountId) return;
+  if (!confirm('Xóa toàn bộ cấu hình quản lý lệnh cho tài khoản này?')) return;
+  try {
+    await api(`/api/${currentAccountId}/manage`, 'DELETE');
+    applyManageConfig({}, false);
+    renderManageStatus({enabled: false, baskets: []});
+    toast('Đã xóa cấu hình quản lý lệnh');
+  } catch (e) { toast(e.message, true); }
+}
+
+['mngBasketEnabled','mngDcaEnabled','mngGridEnabled','mngPyrEnabled','mngHedgeEnabled']
+  .forEach(id => document.getElementById(id)?.addEventListener('change', renderManageBadges));
 
 function connectAccountWs() {
   const accountId = currentAccountId;
