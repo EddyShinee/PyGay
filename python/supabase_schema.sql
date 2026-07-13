@@ -383,3 +383,102 @@ revoke all on function public.delete_account_risk(text) from public;
 grant execute on function public.get_account_risk(text) to anon, authenticated, service_role;
 grant execute on function public.upsert_account_risk(text, boolean, jsonb) to anon, authenticated, service_role;
 grant execute on function public.delete_account_risk(text) to anon, authenticated, service_role;
+
+-- -----------------------------------------------------------------------------
+-- account_entry_config — cấu hình EntryManager (vào lệnh tự động) theo từng MT5 account
+-- -----------------------------------------------------------------------------
+
+create table if not exists public.account_entry_config (
+  account_id text primary key,
+  enabled boolean not null default false,
+  config jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.account_entry_config enable row level security;
+
+revoke all on table public.account_entry_config from anon, authenticated;
+grant all on table public.account_entry_config to postgres, service_role;
+
+create or replace function public.get_account_entry(p_account_id text)
+returns json
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  r public.account_entry_config%rowtype;
+begin
+  select * into r
+  from public.account_entry_config
+  where account_id = trim(p_account_id);
+  if not found then
+    return null;
+  end if;
+  return json_build_object(
+    'account_id', r.account_id,
+    'enabled', r.enabled,
+    'config', r.config,
+    'updated_at', extract(epoch from r.updated_at)::bigint
+  );
+end;
+$$;
+
+create or replace function public.upsert_account_entry(
+  p_account_id text,
+  p_enabled boolean,
+  p_config jsonb
+)
+returns json
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  aid text := trim(p_account_id);
+  saved public.account_entry_config%rowtype;
+begin
+  if aid is null or aid !~ '^[0-9]{5,12}$' then
+    raise exception 'INVALID_ACCOUNT_ID';
+  end if;
+
+  insert into public.account_entry_config (account_id, enabled, config, updated_at)
+  values (aid, coalesce(p_enabled, false), coalesce(p_config, '{}'::jsonb), now())
+  on conflict (account_id) do update set
+    enabled = excluded.enabled,
+    config = excluded.config,
+    updated_at = now()
+  returning * into saved;
+
+  return json_build_object(
+    'account_id', saved.account_id,
+    'enabled', saved.enabled,
+    'config', saved.config,
+    'updated_at', extract(epoch from saved.updated_at)::bigint
+  );
+end;
+$$;
+
+create or replace function public.delete_account_entry(p_account_id text)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  deleted int;
+begin
+  delete from public.account_entry_config
+  where account_id = trim(p_account_id);
+  get diagnostics deleted = row_count;
+  return deleted > 0;
+end;
+$$;
+
+revoke all on function public.get_account_entry(text) from public;
+revoke all on function public.upsert_account_entry(text, boolean, jsonb) from public;
+revoke all on function public.delete_account_entry(text) from public;
+
+grant execute on function public.get_account_entry(text) to anon, authenticated, service_role;
+grant execute on function public.upsert_account_entry(text, boolean, jsonb) to anon, authenticated, service_role;
+grant execute on function public.delete_account_entry(text) to anon, authenticated, service_role;

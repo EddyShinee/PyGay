@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from session_manager import SessionManager, AccountSession
 import account_links
 import account_risk
+import account_entry
 import auth
 import history
 import telegram_notify
@@ -124,6 +125,24 @@ class RiskConfigRequest(BaseModel):
     breakeven_arm_pips: Optional[float] = None
     breakeven_buffer_pips: float = 0.0
     max_hold_minutes: Optional[int] = None
+
+
+class EntryConfigRequest(BaseModel):
+    enabled: bool = False
+    symbol: str = "XAUUSD"
+    side: Literal["BUY", "SELL"] = "BUY"
+    volume: float = 0.01
+    sltp_unit: Literal["points", "pips"] = "points"
+    sl_distance: Optional[float] = None
+    tp_distance: Optional[float] = None
+    cooldown_seconds: float = 60.0
+    max_open_positions: Optional[int] = None
+    max_entries_per_day: Optional[int] = None
+    only_if_flat: bool = False
+    trigger_mode: Literal["schedule", "price_above", "price_below", "interval"] = "schedule"
+    schedule_time: Optional[str] = None
+    price_trigger: Optional[float] = None
+    interval_minutes: Optional[int] = None
 
 
 class RegisterRequest(BaseModel):
@@ -589,6 +608,60 @@ def create_app(sessions: SessionManager) -> FastAPI:
         session = sessions.get(account_id)
         if session is not None:
             await session.risk_manager.reload_config()
+        return {"ok": True, "removed": removed}
+
+    @protected.get("/api/{account_id}/entry")
+    async def get_entry(account_id: str, request: Request):
+        require_account_access(request, account_id)
+        try:
+            row = await asyncio.to_thread(account_entry.get_entry_config, account_id)
+        except account_entry.EntryConfigError as exc:
+            raise HTTPException(500, str(exc))
+        except account_entry.EntryUnavailable as exc:
+            raise HTTPException(503, str(exc))
+        session = sessions.get(account_id)
+        status = session.entry_manager.status() if session else {"enabled": False}
+        if row is None:
+            return {"configured": False, "config": {}, "status": status}
+        return {
+            "configured": True,
+            "enabled": row["enabled"],
+            "config": row["config"],
+            "updated_at": row["updated_at"],
+            "status": status,
+        }
+
+    @protected.post("/api/{account_id}/entry")
+    async def set_entry(account_id: str, req: EntryConfigRequest, request: Request):
+        require_account_access(request, account_id)
+        config = req.model_dump()
+        enabled = bool(config.pop("enabled", False))
+        try:
+            await asyncio.to_thread(account_entry.set_entry_config, account_id, enabled, config)
+        except account_entry.EntryConfigError as exc:
+            raise HTTPException(400, str(exc))
+        except account_entry.EntryUnavailable as exc:
+            raise HTTPException(503, str(exc))
+        session = sessions.get(account_id)
+        if session is not None:
+            await session.entry_manager.reload_config()
+            status = session.entry_manager.status()
+        else:
+            status = {"enabled": enabled}
+        return {"ok": True, "status": status}
+
+    @protected.delete("/api/{account_id}/entry")
+    async def delete_entry(account_id: str, request: Request):
+        require_account_access(request, account_id)
+        try:
+            removed = await asyncio.to_thread(account_entry.clear_entry_config, account_id)
+        except account_entry.EntryConfigError as exc:
+            raise HTTPException(500, str(exc))
+        except account_entry.EntryUnavailable as exc:
+            raise HTTPException(503, str(exc))
+        session = sessions.get(account_id)
+        if session is not None:
+            await session.entry_manager.reload_config()
         return {"ok": True, "removed": removed}
 
     @protected.post("/api/{account_id}/history/fetch")

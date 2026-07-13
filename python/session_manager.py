@@ -17,6 +17,7 @@ from trade_gateway import TradeGateway
 from grid_jobs import GridJobManager
 from history_gateway import HistoryGateway
 from risk_manager import RiskManager
+from entry_manager import EntryManager
 import telegram_notify
 
 logger = logging.getLogger("session_manager")
@@ -36,6 +37,7 @@ class AccountSession:
         self.grid_manager = GridJobManager(self.gateway)
         self.history_gateway = HistoryGateway(server, account_id)
         self.risk_manager = RiskManager(self)
+        self.entry_manager = EntryManager(self)
 
         # Telegram notification bookkeeping (see handlers.py):
         self.has_synced_once = False   # skip diffing "new/modified order" on the very first snapshot
@@ -89,6 +91,8 @@ class SessionManager:
         session.connected = True
         if not session.risk_manager._loaded:
             await session.risk_manager.reload_config()
+        if not session.entry_manager._loaded:
+            await session.entry_manager.reload_config()
         await self._notify()
 
         broker = info.get("broker", "")

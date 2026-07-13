@@ -86,6 +86,18 @@ def format_risk_triggered(account_id: str, reason: str, detail: str = "") -> str
     return "\n".join(lines)
 
 
+def format_entry_triggered(
+    account_id: str, side: str, symbol: str, volume: float, reason: str
+) -> str:
+    icon = "🟢" if side == "BUY" else "🔴"
+    return "\n".join([
+        f"{icon} EntryManager — vào lệnh {side}",
+        f"{symbol} · {volume:.2f} lot",
+        reason,
+        f"#{account_id}",
+    ])
+
+
 def _send_sync(
     bot_token: str,
     chat_id: str,

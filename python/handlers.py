@@ -68,6 +68,8 @@ def register(server: SocketServer, sessions: SessionManager) -> None:
             bid, ask, point = float(bid), float(ask), float(point or 0)
             session.price_cache.update(symbol, bid, ask, point)
             await session.grid_manager.on_price(symbol, bid, ask, point)
+            if session.entry_manager.enabled:
+                await session.entry_manager.evaluate(symbol, bid, ask, point)
 
         signal = compute_signal(message)
         if signal is not None:

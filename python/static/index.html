@@ -624,6 +624,7 @@
       <div class="tab-bar">
         <button type="button" class="tab-btn control-tab-btn" data-tab="general" onclick="switchControlTab('general')">Chung</button>
         <button type="button" class="tab-btn control-tab-btn active" data-tab="trade" onclick="switchControlTab('trade')">Giao dịch</button>
+        <button type="button" class="tab-btn control-tab-btn" data-tab="entry" onclick="switchControlTab('entry')">Vào lệnh</button>
         <button type="button" class="tab-btn control-tab-btn" data-tab="telegram" onclick="switchControlTab('telegram')">Telegram</button>
         <button type="button" class="tab-btn control-tab-btn" data-tab="risk" onclick="switchControlTab('risk')">Rủi ro</button>
       </div>
@@ -684,6 +685,74 @@
             </div>
           </label>
         </div>
+      </div>
+
+      <div class="control-tab-panel" data-tab="entry">
+        <div class="tab-section">
+          <div class="tab-section-title">Trạng thái EntryManager</div>
+          <p class="tab-hint" style="margin-top:0" id="entryStatusLine">Chưa tải cấu hình</p>
+          <label class="tab-field" style="flex-direction:row;align-items:center;gap:8px;margin-top:10px">
+            <input type="checkbox" id="entryEnabled" />
+            <span>Bật vào lệnh tự động cho tài khoản này</span>
+          </label>
+        </div>
+        <div class="tab-section">
+          <div class="tab-section-title">Lệnh cơ bản</div>
+          <div class="tab-row">
+            <label class="tab-field"><span>Symbol</span><input id="entrySymbol" type="text" placeholder="XAUUSD" /></label>
+            <label class="tab-field"><span>Hướng</span>
+              <select id="entrySide"><option value="BUY">BUY</option><option value="SELL">SELL</option></select>
+            </label>
+            <label class="tab-field"><span>Lot</span><input id="entryVolume" type="number" step="0.01" min="0.01" value="0.01" /></label>
+            <label class="tab-field"><span>Cooldown (giây)</span><input id="entryCooldown" type="number" step="1" value="60" /></label>
+          </div>
+          <div class="tab-row">
+            <label class="tab-field"><span>Đơn vị SL/TP</span>
+              <select id="entrySltpUnit"><option value="points">Points</option><option value="pips">Pips (=10 points)</option></select>
+            </label>
+            <label class="tab-field"><span>SL (<span class="entry-unit-label">points</span>)</span><input id="entrySlDist" type="number" step="1" /></label>
+            <label class="tab-field"><span>TP (<span class="entry-unit-label">points</span>)</span><input id="entryTpDist" type="number" step="1" /></label>
+          </div>
+        </div>
+        <div class="tab-section">
+          <div class="tab-section-title">Điều kiện kích hoạt</div>
+          <div class="tab-row">
+            <label class="tab-field"><span>Chế độ</span>
+              <select id="entryTriggerMode" onchange="updateEntryTriggerFields()">
+                <option value="schedule">Theo giờ (HH:MM)</option>
+                <option value="price_above">Giá vượt ngưỡng (BUY)</option>
+                <option value="price_below">Giá xuống ngưỡng (SELL)</option>
+                <option value="interval">Lặp theo phút</option>
+              </select>
+            </label>
+          </div>
+          <div class="tab-row" id="entryFieldSchedule">
+            <label class="tab-field"><span>Giờ vào lệnh (HH:MM)</span><input id="entryScheduleTime" type="text" placeholder="09:30" /></label>
+          </div>
+          <div class="tab-row" id="entryFieldPrice" style="display:none">
+            <label class="tab-field"><span>Mức giá kích hoạt</span><input id="entryPriceTrigger" type="number" step="0.00001" /></label>
+          </div>
+          <div class="tab-row" id="entryFieldInterval" style="display:none">
+            <label class="tab-field"><span>Chu kỳ (phút)</span><input id="entryIntervalMin" type="number" step="1" min="1" /></label>
+          </div>
+        </div>
+        <div class="tab-section">
+          <div class="tab-section-title">Giới hạn</div>
+          <div class="tab-row">
+            <label class="tab-field"><span>Max lệnh mở (tài khoản)</span><input id="entryMaxPositions" type="number" step="1" /></label>
+            <label class="tab-field"><span>Max lần vào / ngày</span><input id="entryMaxPerDay" type="number" step="1" /></label>
+            <label class="tab-field" style="flex-direction:row;align-items:center;gap:8px;padding-top:18px">
+              <input type="checkbox" id="entryOnlyIfFlat" />
+              <span>Chỉ vào khi chưa có lệnh symbol</span>
+            </label>
+          </div>
+        </div>
+        <div class="tab-actions">
+          <button onclick="withButtonLoading(this, saveEntryConfig)">Lưu cấu hình vào lệnh</button>
+          <button class="secondary" onclick="withButtonLoading(this, loadEntryConfig)">Làm mới</button>
+          <button class="danger" onclick="withButtonLoading(this, clearEntryConfig)">Xóa cấu hình</button>
+        </div>
+        <p class="tab-hint">EntryManager chạy nền khi EA online. Kích hoạt theo tick giá hoặc vòng lặp nền (lịch/interval).</p>
       </div>
 
       <div class="control-tab-panel" data-tab="telegram">
@@ -1109,6 +1178,7 @@ function showAccount(accountId) {
   loadInsights();
   loadTelegramStatus();
   loadRiskConfig();
+  loadEntryConfig();
   updateDetailHeader();
   updateActionAvailability();
 }
@@ -1793,6 +1863,101 @@ async function clearRiskConfig() {
     toast('Đã xóa cấu hình rủi ro');
   } catch (e) { toast(e.message, true); }
 }
+
+function updateEntryUnitLabels() {
+  const unit = document.getElementById('entrySltpUnit')?.value || 'points';
+  document.querySelectorAll('.entry-unit-label').forEach(el => { el.textContent = unit; });
+}
+
+function updateEntryTriggerFields() {
+  const mode = document.getElementById('entryTriggerMode')?.value || 'schedule';
+  document.getElementById('entryFieldSchedule').style.display = mode === 'schedule' ? '' : 'none';
+  document.getElementById('entryFieldPrice').style.display = (mode === 'price_above' || mode === 'price_below') ? '' : 'none';
+  document.getElementById('entryFieldInterval').style.display = mode === 'interval' ? '' : 'none';
+}
+
+function renderEntryStatus(status) {
+  const el = document.getElementById('entryStatusLine');
+  if (!el || !status) return;
+  const on = status.enabled ? 'BẬT' : 'TẮT';
+  const trig = status.last_trigger ? ` · gần nhất: ${status.last_trigger}` : '';
+  el.textContent = `${on} · ${status.symbol || '—'} ${status.side || ''} · ${status.open_on_symbol ?? 0} lệnh symbol · ${status.entries_today ?? 0} lần hôm nay${trig}`;
+}
+
+function collectEntryConfig() {
+  return {
+    enabled: document.getElementById('entryEnabled').checked,
+    symbol: (document.getElementById('entrySymbol').value || 'XAUUSD').trim().toUpperCase(),
+    side: document.getElementById('entrySide').value,
+    volume: parseFloat(document.getElementById('entryVolume').value) || 0.01,
+    sltp_unit: document.getElementById('entrySltpUnit').value,
+    sl_distance: riskNum('entrySlDist'),
+    tp_distance: riskNum('entryTpDist'),
+    cooldown_seconds: parseFloat(document.getElementById('entryCooldown').value) || 60,
+    max_open_positions: riskInt('entryMaxPositions'),
+    max_entries_per_day: riskInt('entryMaxPerDay'),
+    only_if_flat: document.getElementById('entryOnlyIfFlat').checked,
+    trigger_mode: document.getElementById('entryTriggerMode').value,
+    schedule_time: document.getElementById('entryScheduleTime').value.trim() || null,
+    price_trigger: riskNum('entryPriceTrigger'),
+    interval_minutes: riskInt('entryIntervalMin'),
+  };
+}
+
+function applyEntryConfig(cfg, enabledFlag) {
+  cfg = cfg || {};
+  document.getElementById('entryEnabled').checked = !!enabledFlag;
+  document.getElementById('entrySymbol').value = cfg.symbol || 'XAUUSD';
+  document.getElementById('entrySide').value = cfg.side || 'BUY';
+  setRiskField('entryVolume', cfg.volume ?? 0.01);
+  document.getElementById('entrySltpUnit').value = cfg.sltp_unit || 'points';
+  updateEntryUnitLabels();
+  setRiskField('entrySlDist', cfg.sl_distance);
+  setRiskField('entryTpDist', cfg.tp_distance);
+  setRiskField('entryCooldown', cfg.cooldown_seconds ?? 60);
+  setRiskField('entryMaxPositions', cfg.max_open_positions, true);
+  setRiskField('entryMaxPerDay', cfg.max_entries_per_day, true);
+  document.getElementById('entryOnlyIfFlat').checked = !!cfg.only_if_flat;
+  document.getElementById('entryTriggerMode').value = cfg.trigger_mode || 'schedule';
+  document.getElementById('entryScheduleTime').value = cfg.schedule_time || '';
+  setRiskField('entryPriceTrigger', cfg.price_trigger);
+  setRiskField('entryIntervalMin', cfg.interval_minutes, true);
+  updateEntryTriggerFields();
+}
+
+async function loadEntryConfig() {
+  if (!currentAccountId) return;
+  const accountId = currentAccountId;
+  try {
+    const data = await api(`/api/${accountId}/entry`, 'GET');
+    if (accountId !== currentAccountId) return;
+    applyEntryConfig(data.config || {}, data.enabled);
+    renderEntryStatus(data.status);
+  } catch (e) { /* best-effort */ }
+}
+
+async function saveEntryConfig() {
+  if (!currentAccountId) return;
+  try {
+    const body = collectEntryConfig();
+    const data = await api(`/api/${currentAccountId}/entry`, 'POST', body);
+    renderEntryStatus(data.status);
+    toast('Đã lưu cấu hình EntryManager');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function clearEntryConfig() {
+  if (!currentAccountId) return;
+  if (!confirm('Xóa toàn bộ cấu hình vào lệnh cho tài khoản này?')) return;
+  try {
+    await api(`/api/${currentAccountId}/entry`, 'DELETE');
+    applyEntryConfig({}, false);
+    renderEntryStatus({enabled: false, entries_today: 0, open_on_symbol: 0});
+    toast('Đã xóa cấu hình vào lệnh');
+  } catch (e) { toast(e.message, true); }
+}
+
+document.getElementById('entrySltpUnit')?.addEventListener('change', updateEntryUnitLabels);
 
 function connectAccountWs() {
   const accountId = currentAccountId;
