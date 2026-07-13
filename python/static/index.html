@@ -701,7 +701,7 @@
           <div class="tab-row">
             <label class="tab-field"><span>Symbol</span><input id="entrySymbol" type="text" placeholder="XAUUSD" /></label>
             <label class="tab-field"><span>Hướng</span>
-              <select id="entrySide"><option value="BUY">BUY</option><option value="SELL">SELL</option></select>
+              <select id="entrySide"><option value="BUY">BUY</option><option value="SELL">SELL</option><option value="BOTH">Cả hai (theo chỉ báo)</option></select>
             </label>
             <label class="tab-field"><span>Lot</span><input id="entryVolume" type="number" step="0.01" min="0.01" value="0.01" /></label>
             <label class="tab-field"><span>Cooldown (giây)</span><input id="entryCooldown" type="number" step="1" value="60" /></label>
@@ -759,7 +759,7 @@
               </select>
             </label>
           </div>
-          <p class="tab-hint">Bật/tắt và tinh chỉnh từng chỉ báo. Hướng lệnh (BUY/SELL) do chỉ báo quyết định.</p>
+          <p class="tab-hint">Bật/tắt và tinh chỉnh từng chỉ báo. Hướng lệnh do chỉ báo quyết định — chọn ô "Hướng" = <b>Cả hai</b> để vào cả BUY và SELL, hoặc BUY/SELL để chỉ vào một chiều.</p>
           <div id="entryIndicatorList"></div>
         </div>
         <div class="tab-section">

@@ -307,6 +307,11 @@ class EntryManager:
 
         if side is None:
             return None
+        # Direction filter: BUY/SELL restricts to that side only; BOTH (or any
+        # other value) accepts whichever direction the indicators produce.
+        allowed = (cfg.side or "BOTH").upper()
+        if allowed in ("BUY", "SELL") and side != allowed:
+            return None
         reason = f"Chỉ báo [{logic}] {', '.join(fired)} — {side}"
         self._ind_cached = (side, reason)
         return self._ind_cached
@@ -321,7 +326,11 @@ class EntryManager:
         reason: str,
         side: Optional[str] = None,
     ) -> None:
-        side = side or cfg.side
+        side = (side or cfg.side or "BUY").upper()
+        if side not in ("BUY", "SELL"):
+            # BOTH only makes sense for indicator mode (side chosen above);
+            # for schedule/interval fall back to BUY so we never send BOTH.
+            side = "BUY"
         self._acting = True
         self._last_trigger = reason
         try:

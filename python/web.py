@@ -130,7 +130,7 @@ class RiskConfigRequest(BaseModel):
 class EntryConfigRequest(BaseModel):
     enabled: bool = False
     symbol: str = "XAUUSD"
-    side: Literal["BUY", "SELL"] = "BUY"
+    side: Literal["BUY", "SELL", "BOTH"] = "BUY"
     volume: float = 0.01
     sltp_unit: Literal["points", "pips"] = "points"
     sl_distance: Optional[float] = None
