@@ -14,11 +14,14 @@ input int    InpPollMs              = 20;
 input int    InpReconnectS          = 3;
 input int    InpPositionsIntervalMs = 1000;
 input int    InpMagicNumber         = 123456;
+input bool   InpStreamWatchSymbols  = true;  // stream prices for ALL Market Watch symbols
+input int    InpPricesIntervalMs    = 500;   // how often to push Market Watch prices
 
 CSocket  g_socket;
 string   g_rx_buffer = "";
 datetime g_last_reconnect_attempt = 0;
 uint     g_last_positions_ms = 0;
+uint     g_last_prices_ms = 0;
 int      g_last_history_total = 0;
 int      g_magic = 0;
 int      g_slippage = 3;
@@ -127,12 +130,45 @@ void OnTimer()
 
    DrainMessages();
 
+   if(InpStreamWatchSymbols && GetTickCount() - g_last_prices_ms >= (uint)InpPricesIntervalMs)
+   {
+      SendWatchPrices();
+      g_last_prices_ms = GetTickCount();
+   }
+
    if(GetTickCount() - g_last_positions_ms >= (uint)InpPositionsIntervalMs)
    {
       SendPositionsSnapshot();
       SendAccountInfo();
       SyncClosedDeals();
       g_last_positions_ms = GetTickCount();
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Push bid/ask for every Market Watch symbol so the server can     |
+//| quote & trade any ticker from a single chart.                    |
+//+------------------------------------------------------------------+
+void SendWatchPrices()
+{
+   int total = SymbolsTotal(true); // Market Watch symbols only
+   for(int i = 0; i < total; i++)
+   {
+      string sym = SymbolName(i, true);
+      double bid = MarketInfo(sym, MODE_BID);
+      double ask = MarketInfo(sym, MODE_ASK);
+      if(bid <= 0 && ask <= 0)
+         continue;
+
+      int digits = (int)MarketInfo(sym, MODE_DIGITS);
+      CJson msg;
+      msg.AddString("type", "tick");
+      msg.AddString("symbol", sym);
+      msg.AddDouble("bid", bid, digits);
+      msg.AddDouble("ask", ask, digits);
+      msg.AddDouble("point", MarketInfo(sym, MODE_POINT), 8);
+      msg.AddInt("time", (long)TimeCurrent());
+      g_socket.Send(msg.Serialize() + "\n");
    }
 }
 
@@ -220,6 +256,8 @@ void HandleMessage(CJson &msg)
       { HandleSetMagic(msg); return; }
    if(type == "get_history")
       { HandleGetHistory(msg); return; }
+   if(type == "watch_symbol")
+      { HandleWatchSymbol(msg); return; }
 
    Print("SocketBridgeEA: unknown message type: ", type);
 }
@@ -227,6 +265,9 @@ void HandleMessage(CJson &msg)
 bool ExecuteMarketOrder(const string side, const string symbol, const double volume,
                          const double sl, const double tp, int &out_ticket)
 {
+   // Make sure the symbol is in the Market Watch so quotes are available;
+   // lets us trade any ticker from a single chart.
+   SymbolSelect(symbol, true);
    RefreshRates();
    int type = (side == "BUY") ? OP_BUY : OP_SELL;
    if(side != "BUY" && side != "SELL")
@@ -406,6 +447,13 @@ void HandleGetHistory(CJson &msg)
    end.AddString("type", "history_end");
    end.AddString("id", id);
    g_socket.Send(end.Serialize() + "\n");
+}
+
+void HandleWatchSymbol(CJson &msg)
+{
+   string symbol = msg.GetString("symbol", "");
+   if(symbol != "")
+      SymbolSelect(symbol, true);
 }
 
 void SendPositionsSnapshot()

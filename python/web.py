@@ -428,7 +428,13 @@ def create_app(sessions: SessionManager) -> FastAPI:
         require_connected(session)
         cached = session.price_cache.get(req.symbol)
         if cached is None:
-            raise HTTPException(400, f"Chưa có dữ liệu giá cho {req.symbol}, chờ EA gửi tick trước.")
+            # Symbol not streamed yet: ask the EA to add it to the Market Watch
+            # so it starts quoting, then have the user retry in a moment.
+            await session.gateway.watch_symbol(req.symbol)
+            raise HTTPException(
+                400,
+                f"Đang thêm {req.symbol} vào Market Watch, chờ EA gửi giá rồi thử lại sau 1-2 giây.",
+            )
         price = cached["ask"] if req.side == "BUY" else cached["bid"]
         result = await session.grid_manager.start_job(
             symbol=req.symbol, side=req.side, volume=req.volume,

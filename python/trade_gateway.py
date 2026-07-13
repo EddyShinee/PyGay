@@ -90,6 +90,13 @@ class TradeGateway:
     async def set_magic(self, magic: int) -> dict:
         return await self._send({"type": "set_magic", "magic": magic})
 
+    async def watch_symbol(self, symbol: str) -> None:
+        """Fire-and-forget: ask the EA to add `symbol` to the Market Watch so
+        it starts streaming quotes for it. No reply expected."""
+        client = self._current_client()
+        if client is not None:
+            await client.send({"type": "watch_symbol", "symbol": symbol})
+
     async def request_positions(self) -> None:
         """Fire-and-forget: EA replies with a positions_begin/.../positions_end
         burst handled by handlers.py, not a single order_result."""
