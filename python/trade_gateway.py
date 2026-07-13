@@ -14,7 +14,7 @@ logger = logging.getLogger("trade_gateway")
 
 
 class TradeGateway:
-    def __init__(self, server: SocketServer, account_id: str, timeout: float = 5.0):
+    def __init__(self, server: SocketServer, account_id: str, timeout: float = 10.0):
         self.server = server
         self.account_id = account_id
         self.timeout = timeout
@@ -26,9 +26,25 @@ class TradeGateway:
         future = self._pending.pop(req_id, None) if req_id else None
         if future and not future.done():
             future.set_result(message)
+        elif req_id:
+            # A response arrived with no waiter - almost always an order_result
+            # that came back AFTER we already timed out. Surface it so the real
+            # broker retcode/error is visible instead of a generic timeout.
+            logger.warning(
+                "[%s] late/unmatched order_result id=%s ok=%s error=%s",
+                self.account_id, req_id, message.get("ok"), message.get("error"),
+            )
 
     def _current_client(self) -> Optional[Client]:
         clients = [c for c in self.server.clients() if c.account_id == self.account_id]
+        if len(clients) > 1:
+            # More than one live socket claims this account: a stale/duplicate
+            # connection can steal commands while ticks flow over another. We
+            # send to the most recent, but log it so this is diagnosable.
+            logger.warning(
+                "[%s] %d clients match this account; using most recent %s",
+                self.account_id, len(clients), clients[-1].address,
+            )
         return clients[-1] if clients else None
 
     async def _send(self, message: dict) -> dict:
@@ -44,6 +60,10 @@ class TradeGateway:
             await client.send(message)
             return await asyncio.wait_for(future, timeout=self.timeout)
         except asyncio.TimeoutError:
+            logger.warning(
+                "[%s] no response in %.0fs for %s (client=%s)",
+                self.account_id, self.timeout, message.get("type"), client.address,
+            )
             return {"ok": False, "error": "timeout waiting for EA response"}
         except Exception as exc:
             logger.exception("send_command failed")

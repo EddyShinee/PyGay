@@ -23,6 +23,9 @@ logger = logging.getLogger("entry_manager")
 SUPERVISOR_INTERVAL_S = 1.0
 BARS_CACHE_TTL_S = 30.0
 INDICATOR_THROTTLE_S = 3.0
+# After a failed/timed-out order we back off before retrying so a broken EA
+# link or rejecting broker doesn't get hammered every few seconds.
+FAIL_BACKOFF_S = 30.0
 
 
 def _utc_today() -> str:
@@ -72,6 +75,7 @@ class EntryManager:
         self.enabled = False
 
         self._last_entry_ts: float = 0.0
+        self._fail_until: float = 0.0
         self._acting: bool = False
         self._loaded: bool = False
         self._schedule_fired_date: Optional[str] = None
@@ -134,6 +138,8 @@ class EntryManager:
         if self._acting or point <= 0:
             return
         now = time.monotonic()
+        if now < self._fail_until:
+            return
         if now - self._last_entry_ts < cfg.cooldown_seconds:
             return
 
@@ -347,7 +353,11 @@ class EntryManager:
                     ),
                 )
             else:
-                logger.warning("[%s] entry failed: %s", self.account_id, result.get("error"))
+                self._fail_until = time.monotonic() + FAIL_BACKOFF_S
+                logger.warning(
+                    "[%s] entry failed: %s (backoff %.0fs)",
+                    self.account_id, result.get("error"), FAIL_BACKOFF_S,
+                )
         finally:
             self._acting = False
 
