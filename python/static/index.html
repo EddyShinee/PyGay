@@ -740,7 +740,7 @@
         <div class="tab-section" id="entryFieldIndicators" style="display:none">
           <div class="tab-section-title">Chỉ báo kỹ thuật</div>
           <div class="tab-row">
-            <label class="tab-field"><span>Khung thời gian</span>
+            <label class="tab-field"><span>Khung thời gian chung (mặc định)</span>
               <select id="entryIndicatorTf">
                 <option value="M1">M1</option>
                 <option value="M5">M5</option>
@@ -759,7 +759,7 @@
               </select>
             </label>
           </div>
-          <p class="tab-hint">Bật/tắt và tinh chỉnh từng chỉ báo. Hướng lệnh do chỉ báo quyết định — chọn ô "Hướng" = <b>Cả hai</b> để vào cả BUY và SELL, hoặc BUY/SELL để chỉ vào một chiều.</p>
+          <p class="tab-hint">Bật/tắt và tinh chỉnh từng chỉ báo. Mỗi chỉ báo có thể chọn <b>khung TG riêng</b>; để "(theo khung chung)" thì dùng khung mặc định ở trên. Hướng lệnh do chỉ báo quyết định — chọn ô "Hướng" = <b>Cả hai</b> để vào cả BUY và SELL, hoặc BUY/SELL để chỉ vào một chiều.</p>
           <div id="entryIndicatorList"></div>
         </div>
         <div class="tab-section">
@@ -1923,6 +1923,11 @@ const ENTRY_INDICATORS = [
   {key:'marubozu', label:'Marubozu', group:'Nến Nhật (Candlestick)', fields:[['body_ratio','Tỷ lệ thân/biên độ',0.9]]},
 ];
 
+const ENTRY_TF_OPTS = ['', 'M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'];
+function entryTfOptions() {
+  return ENTRY_TF_OPTS.map(t => `<option value="${t}">${t || '(theo khung chung)'}</option>`).join('');
+}
+
 function renderEntryIndicators() {
   const box = document.getElementById('entryIndicatorList');
   if (!box) return;
@@ -1933,9 +1938,8 @@ function renderEntryIndicators() {
       lastGroup = ind.group;
       html += `<div class="tab-section-title" style="margin-top:12px">${ind.group}</div>`;
     }
-    const fieldsHtml = ind.fields.length
-      ? `<div class="tab-row">${ind.fields.map(f => `<label class="tab-field"><span>${f[1]}</span><input id="ind_${ind.key}_${f[0]}" type="number" step="any" value="${f[2]}" /></label>`).join('')}</div>`
-      : `<span class="tab-hint">Mẫu nến — không có tham số</span>`;
+    const tfField = `<label class="tab-field"><span>Khung TG riêng</span><select id="ind_${ind.key}_timeframe">${entryTfOptions()}</select></label>`;
+    const numFields = ind.fields.map(f => `<label class="tab-field"><span>${f[1]}</span><input id="ind_${ind.key}_${f[0]}" type="number" step="any" value="${f[2]}" /></label>`).join('');
     html += `
     <div class="tab-section" style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px">
       <label class="tab-field" style="flex-direction:row;align-items:center;gap:8px;margin-bottom:6px">
@@ -1943,7 +1947,7 @@ function renderEntryIndicators() {
         <span style="font-weight:600">${ind.label}</span>
         <span id="ind_${ind.key}_sig" class="tab-hint" style="margin:0 0 0 auto"></span>
       </label>
-      ${fieldsHtml}
+      <div class="tab-row">${tfField}${numFields}</div>
     </div>`;
   }
   box.innerHTML = html;
@@ -1954,6 +1958,8 @@ function collectEntryIndicators() {
   for (const ind of ENTRY_INDICATORS) {
     const en = document.getElementById(`ind_${ind.key}_enabled`);
     const o = { enabled: !!(en && en.checked) };
+    const tfEl = document.getElementById(`ind_${ind.key}_timeframe`);
+    if (tfEl && tfEl.value) o.timeframe = tfEl.value;
     for (const f of ind.fields) {
       const el = document.getElementById(`ind_${ind.key}_${f[0]}`);
       const v = el ? parseFloat(el.value) : NaN;
@@ -1970,6 +1976,8 @@ function applyEntryIndicators(inds) {
     const cfg = inds[ind.key] || {};
     const en = document.getElementById(`ind_${ind.key}_enabled`);
     if (en) en.checked = !!cfg.enabled;
+    const tfEl = document.getElementById(`ind_${ind.key}_timeframe`);
+    if (tfEl) tfEl.value = cfg.timeframe || '';
     for (const f of ind.fields) {
       const el = document.getElementById(`ind_${ind.key}_${f[0]}`);
       if (el && cfg[f[0]] != null) el.value = cfg[f[0]];

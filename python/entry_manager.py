@@ -268,15 +268,18 @@ class EntryManager:
         if not enabled:
             return None
 
-        tf = cfg.indicator_timeframe or "H1"
-        bars = await self._get_bars(symbol, tf)
-        if len(bars) < 30:
-            return None
+        default_tf = cfg.indicator_timeframe or "H1"
 
         buys = 0
         sells = 0
         fired: list[str] = []
         for key, params in enabled:
+            # Each indicator may override the common timeframe with its own.
+            tf = (params.get("timeframe") or default_tf)
+            bars = await self._get_bars(symbol, tf)
+            if len(bars) < 30:
+                self._last_signals[key] = None
+                continue
             sig = indicators.indicator_signal(key, bars, params)
             self._last_signals[key] = sig
             if sig == "BUY":
