@@ -1816,9 +1816,7 @@ function renderPositions() {
   emptyEl.style.display = rows.length ? 'none' : 'block';
   const dis = currentAccountConnected ? '' : 'disabled';
   bodyEl.innerHTML = rows.map(p => {
-    const modifyBusy = isPending('modify:' + p.ticket);
     const closeBusy = isPending('close:' + p.ticket);
-    const modifyDis = dis || (modifyBusy ? 'disabled' : '');
     const closeDis = dis || (closeBusy ? 'disabled' : '');
     return `
     <tr data-ticket="${p.ticket}">
@@ -1833,7 +1831,6 @@ function renderPositions() {
       <td data-label="Comment">${p.comment ? escapeHtml(p.comment) : '—'}</td>
       <td data-label="Profit" class="${p.profit >= 0 ? 'profit-pos' : 'profit-neg'}">${fmt(p.profit + p.swap)}</td>
       <td data-label="Thao tác" class="row-actions">
-        <button class="secondary" onclick="openModifyModal(${p.ticket})" ${modifyDis}>${modifyBusy ? '...' : 'Sửa SL/TP'}</button>
         <button class="danger" onclick="runPending('close:${p.ticket}', () => closePosition(${p.ticket}), renderPositions)" ${closeDis}>${closeBusy ? '...' : 'Đóng'}</button>
       </td>
     </tr>
