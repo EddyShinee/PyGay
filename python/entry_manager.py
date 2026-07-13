@@ -36,7 +36,8 @@ def _utc_today() -> str:
 @dataclass
 class EntryConfig:
     enabled: bool = False
-    symbol: str = "XAUUSD"
+    symbol: str = "XAUUSD"  # legacy single-symbol field (kept for back-compat)
+    symbols: list = field(default_factory=list)  # preferred: list of symbols to scan
     side: str = "BUY"  # BUY | SELL
     volume: float = 0.01
     sltp_unit: str = "points"  # points | pips
@@ -71,6 +72,36 @@ class EntryConfig:
     def to_dict(self) -> dict:
         return {f.name: getattr(self, f.name) for f in fields(self)}
 
+    def symbol_list(self) -> list[str]:
+        """Normalized, de-duplicated list of symbols to scan. Accepts either
+        the `symbols` list or the legacy `symbol` field, and tolerates commas,
+        spaces or semicolons as separators."""
+        raw: list = list(self.symbols) if self.symbols else ([self.symbol] if self.symbol else [])
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in raw:
+            for part in str(item).replace(";", ",").replace(" ", ",").split(","):
+                s = part.strip().upper()
+                if s and s not in seen:
+                    seen.add(s)
+                    out.append(s)
+        return out
+
+
+@dataclass
+class _SymState:
+    """Per-symbol runtime state so each symbol is scanned/cooled independently."""
+    last_entry_ts: float = 0.0
+    fail_until: float = 0.0
+    last_ask: Optional[float] = None
+    last_bid: Optional[float] = None
+    schedule_fired_date: Optional[str] = None
+    ind_calc_ts: float = 0.0
+    ind_cached: Optional[tuple] = None
+    last_signals: dict = field(default_factory=dict)
+    last_ml_proba: Optional[float] = None
+    last_trigger: Optional[str] = None
+
 
 class EntryManager:
     def __init__(self, session: "AccountSession"):
@@ -78,26 +109,40 @@ class EntryManager:
         self.config = EntryConfig()
         self.enabled = False
 
-        self._last_entry_ts: float = 0.0
-        self._fail_until: float = 0.0
         self._acting: bool = False
         self._loaded: bool = False
-        self._schedule_fired_date: Optional[str] = None
         self._entries_day: str = ""
         self._entries_today: int = 0
-        self._last_ask: Optional[float] = None
-        self._last_bid: Optional[float] = None
         self._last_trigger: Optional[str] = None
-        # Indicator engine caches
+        # Per-symbol runtime state (cooldown, caches, last signals, ...).
+        self._sym: dict[str, _SymState] = {}
+        # Bars cache is shared, already keyed by "symbol:timeframe".
         self._bars_cache: dict[str, tuple[float, list]] = {}
-        self._ind_calc_ts: float = 0.0
-        self._ind_cached: Optional[tuple[str, str]] = None
-        self._last_signals: dict[str, Optional[str]] = {}
-        self._last_ml_proba: Optional[float] = None
+        # Throttle Market Watch requests for symbols with no live price yet.
+        self._watch_req: dict[str, float] = {}
 
     @property
     def account_id(self) -> str:
         return self._session.account_id
+
+    def _state(self, symbol: str) -> _SymState:
+        st = self._sym.get(symbol)
+        if st is None:
+            st = _SymState()
+            self._sym[symbol] = st
+        return st
+
+    async def request_watch(self, symbol: str) -> None:
+        """Ask the EA to add a symbol to Market Watch so it starts streaming
+        prices. Throttled to at most once every 30s per symbol."""
+        now = time.monotonic()
+        if now - self._watch_req.get(symbol, 0.0) < 30.0:
+            return
+        self._watch_req[symbol] = now
+        try:
+            await self._session.gateway.watch_symbol(symbol)
+        except Exception:
+            logger.debug("[%s] watch_symbol(%s) failed", self.account_id, symbol)
 
     def _unit_factor(self) -> float:
         return 10.0 if (self.config.sltp_unit or "points").lower() == "pips" else 1.0
@@ -118,21 +163,44 @@ class EntryManager:
 
     def status(self) -> dict:
         cfg = self.config
+        symbols = cfg.symbol_list()
         positions = self._session.store.snapshot()
-        sym_positions = [p for p in positions if p.get("symbol") == cfg.symbol]
+        open_by_sym: dict[str, int] = {}
+        for p in positions:
+            s = (p.get("symbol") or "").upper()
+            open_by_sym[s] = open_by_sym.get(s, 0) + 1
+
+        per_symbol = {}
+        for sym in symbols:
+            st = self._sym.get(sym)
+            per_symbol[sym] = {
+                "open": open_by_sym.get(sym, 0),
+                "last_trigger": st.last_trigger if st else None,
+                "last_ask": st.last_ask if st else None,
+                "last_bid": st.last_bid if st else None,
+                "ml_proba": st.last_ml_proba if st else None,
+                "indicator_signals": dict(st.last_signals) if st else {},
+            }
+
+        # First symbol drives the indicator badges / single-symbol UI fields.
+        primary = symbols[0] if symbols else ""
+        pst = self._sym.get(primary)
         return {
             "enabled": self.enabled,
             "acting": self._acting,
             "last_trigger": self._last_trigger,
-            "symbol": cfg.symbol,
+            "symbol": ", ".join(symbols) if symbols else "—",
+            "symbols": symbols,
             "side": cfg.side,
             "trigger_mode": cfg.trigger_mode,
-            "open_on_symbol": len(sym_positions),
+            "open_on_symbol": open_by_sym.get(primary, 0),
+            "open_total": sum(open_by_sym.get(s, 0) for s in symbols),
             "entries_today": self._entries_today,
-            "last_ask": self._last_ask,
-            "last_bid": self._last_bid,
-            "indicator_signals": dict(self._last_signals),
-            "ml_proba": self._last_ml_proba,
+            "per_symbol": per_symbol,
+            "last_ask": pst.last_ask if pst else None,
+            "last_bid": pst.last_bid if pst else None,
+            "indicator_signals": dict(pst.last_signals) if pst else {},
+            "ml_proba": pst.last_ml_proba if pst else None,
             "ml_trained_at": (cfg.ml or {}).get("model", {}).get("trained_at"),
             "ml_accuracy": (cfg.ml or {}).get("model", {}).get("accuracy"),
         }
@@ -141,18 +209,20 @@ class EntryManager:
         if not self.enabled or not self._session.connected:
             return
         cfg = self.config
-        if symbol.upper() != (cfg.symbol or "").upper():
+        symbol = symbol.upper()
+        if symbol not in cfg.symbol_list():
             return
         if self._acting or point <= 0:
             return
+        st = self._state(symbol)
         now = time.monotonic()
-        if now < self._fail_until:
+        if now < st.fail_until:
             return
-        if now - self._last_entry_ts < cfg.cooldown_seconds:
+        if now - st.last_entry_ts < cfg.cooldown_seconds:
             return
 
-        prev_ask, prev_bid = self._last_ask, self._last_bid
-        self._last_ask, self._last_bid = ask, bid
+        prev_ask, prev_bid = st.last_ask, st.last_bid
+        st.last_ask, st.last_bid = ask, bid
 
         if not self._guards_ok(cfg, symbol):
             return
@@ -160,21 +230,21 @@ class EntryManager:
         side = cfg.side
         mode = (cfg.trigger_mode or "").lower()
         if mode == "indicators":
-            res = await self._indicator_signal(cfg, symbol)
+            res = await self._indicator_signal(cfg, symbol, st)
             if not res:
                 return
             side, reason = res
         elif mode == "ml":
-            res = await self._ml_signal(cfg, symbol)
+            res = await self._ml_signal(cfg, symbol, st)
             if not res:
                 return
             side, reason = res
         else:
-            reason = self._check_trigger(cfg, bid, ask, prev_bid, prev_ask)
+            reason = self._check_trigger(cfg, symbol, st, bid, ask, prev_bid, prev_ask)
             if not reason:
                 return
 
-        await self._execute_entry(cfg, symbol, bid, ask, point, reason, side)
+        await self._execute_entry(cfg, symbol, st, bid, ask, point, reason, side)
 
     def _guards_ok(self, cfg: EntryConfig, symbol: str) -> bool:
         positions = self._session.store.snapshot()
@@ -196,6 +266,8 @@ class EntryManager:
     def _check_trigger(
         self,
         cfg: EntryConfig,
+        symbol: str,
+        st: _SymState,
         bid: float,
         ask: float,
         prev_bid: Optional[float],
@@ -214,17 +286,17 @@ class EntryManager:
             except (ValueError, AttributeError):
                 return None
             if now.hour > th or (now.hour == th and now.minute >= tm):
-                if self._schedule_fired_date != today:
-                    self._schedule_fired_date = today
+                if st.schedule_fired_date != today:
+                    st.schedule_fired_date = today
                     return f"Lịch {cfg.schedule_time} — vào lệnh {cfg.side}"
             return None
 
         if mode == "interval":
             if not cfg.interval_minutes or cfg.interval_minutes <= 0:
                 return None
-            if self._last_entry_ts == 0:
+            if st.last_entry_ts == 0:
                 return f"Interval {cfg.interval_minutes} phút — lần đầu"
-            elapsed = (time.monotonic() - self._last_entry_ts) / 60
+            elapsed = (time.monotonic() - st.last_entry_ts) / 60
             if elapsed >= cfg.interval_minutes:
                 return f"Interval {cfg.interval_minutes} phút — đủ chu kỳ"
             return None
@@ -261,16 +333,16 @@ class EntryManager:
             return cached[1] if cached else []
 
     async def _indicator_signal(
-        self, cfg: EntryConfig, symbol: str
+        self, cfg: EntryConfig, symbol: str, st: _SymState
     ) -> Optional[tuple[str, str]]:
         """Evaluate enabled indicators and combine into a (side, reason) or None.
         Throttled so repeated ticks don't recompute more than every few seconds."""
         now = time.monotonic()
-        if now - self._ind_calc_ts < INDICATOR_THROTTLE_S:
-            return self._ind_cached
+        if now - st.ind_calc_ts < INDICATOR_THROTTLE_S:
+            return st.ind_cached
 
-        self._ind_calc_ts = now
-        self._ind_cached = None
+        st.ind_calc_ts = now
+        st.ind_cached = None
 
         cfg_inds = cfg.indicators or {}
         enabled = [
@@ -278,7 +350,7 @@ class EntryManager:
             for key, params in cfg_inds.items()
             if isinstance(params, dict) and params.get("enabled")
         ]
-        self._last_signals = {}
+        st.last_signals = {}
         if not enabled:
             return None
 
@@ -292,10 +364,10 @@ class EntryManager:
             tf = (params.get("timeframe") or default_tf)
             bars = await self._get_bars(symbol, tf)
             if len(bars) < 30:
-                self._last_signals[key] = None
+                st.last_signals[key] = None
                 continue
             sig = indicators.indicator_signal(key, bars, params)
-            self._last_signals[key] = sig
+            st.last_signals[key] = sig
             if sig == "BUY":
                 buys += 1
                 fired.append(f"{key}↑")
@@ -330,18 +402,20 @@ class EntryManager:
         if allowed in ("BUY", "SELL") and side != allowed:
             return None
         reason = f"Chỉ báo [{logic}] {', '.join(fired)} — {side}"
-        self._ind_cached = (side, reason)
-        return self._ind_cached
+        st.ind_cached = (side, reason)
+        return st.ind_cached
 
-    async def _ml_signal(self, cfg: EntryConfig, symbol: str) -> Optional[tuple[str, str]]:
+    async def _ml_signal(
+        self, cfg: EntryConfig, symbol: str, st: _SymState
+    ) -> Optional[tuple[str, str]]:
         """Evaluate the trained ML model on the latest bars. Throttled like
         the indicator path. Returns (side, reason) or None."""
         now = time.monotonic()
-        if now - self._ind_calc_ts < INDICATOR_THROTTLE_S:
-            return self._ind_cached
-        self._ind_calc_ts = now
-        self._ind_cached = None
-        self._last_ml_proba = None
+        if now - st.ind_calc_ts < INDICATOR_THROTTLE_S:
+            return st.ind_cached
+        st.ind_calc_ts = now
+        st.ind_cached = None
+        st.last_ml_proba = None
 
         ml_cfg = cfg.ml or {}
         model = ml_cfg.get("model")
@@ -355,18 +429,19 @@ class EntryManager:
             return None
 
         proba = ml_entry.predict_proba(bars, model)
-        self._last_ml_proba = proba
+        st.last_ml_proba = proba
         side = ml_entry.predict_signal(bars, model, threshold, cfg.side)
         if side is None:
             return None
         reason = f"ML p(up)={proba:.2f} ngưỡng {threshold:.2f} — {side}"
-        self._ind_cached = (side, reason)
-        return self._ind_cached
+        st.ind_cached = (side, reason)
+        return st.ind_cached
 
     async def _execute_entry(
         self,
         cfg: EntryConfig,
         symbol: str,
+        st: _SymState,
         bid: float,
         ask: float,
         point: float,
@@ -379,7 +454,8 @@ class EntryManager:
             # for schedule/interval fall back to BUY so we never send BOTH.
             side = "BUY"
         self._acting = True
-        self._last_trigger = reason
+        self._last_trigger = f"{symbol}: {reason}"
+        st.last_trigger = reason
         try:
             price = ask if side == "BUY" else bid
             unit = self._unit_factor()
@@ -391,7 +467,7 @@ class EntryManager:
                 symbol, side, cfg.volume, sl, tp
             )
             if result.get("ok"):
-                self._last_entry_ts = time.monotonic()
+                st.last_entry_ts = time.monotonic()
                 today = _utc_today()
                 if self._entries_day != today:
                     self._entries_day = today
@@ -409,10 +485,10 @@ class EntryManager:
                     ),
                 )
             else:
-                self._fail_until = time.monotonic() + FAIL_BACKOFF_S
+                st.fail_until = time.monotonic() + FAIL_BACKOFF_S
                 logger.warning(
-                    "[%s] entry failed: %s (backoff %.0fs)",
-                    self.account_id, result.get("error"), FAIL_BACKOFF_S,
+                    "[%s] entry failed on %s: %s (backoff %.0fs)",
+                    self.account_id, symbol, result.get("error"), FAIL_BACKOFF_S,
                 )
         finally:
             self._acting = False
@@ -430,18 +506,18 @@ async def run_entry_supervisor(sessions: "SessionManager") -> None:
                 if not session.connected or not em.enabled:
                     continue
                 cfg = em.config
-                sym = (cfg.symbol or "").upper()
-                if not sym:
-                    continue
-                price = session.price_cache.get(sym)
-                if price is None:
-                    continue
-                await em.evaluate(
-                    sym,
-                    float(price["bid"]),
-                    float(price["ask"]),
-                    float(price.get("point") or 0),
-                )
+                for sym in cfg.symbol_list():
+                    price = session.price_cache.get(sym)
+                    if price is None:
+                        # Not streaming yet - nudge the EA to watch it.
+                        await em.request_watch(sym)
+                        continue
+                    await em.evaluate(
+                        sym,
+                        float(price["bid"]),
+                        float(price["ask"]),
+                        float(price.get("point") or 0),
+                    )
         except Exception:
             logger.exception("entry supervisor tick failed")
         await asyncio.sleep(SUPERVISOR_INTERVAL_S)

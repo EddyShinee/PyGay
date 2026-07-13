@@ -143,6 +143,52 @@
     font-size: 11px;
   }
   .tab-group > .tab-group-body { padding: 0 14px 14px; }
+  /* Multi-symbol chips input */
+  .chips-input {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    background: var(--input-bg, #0b0e14);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 8px;
+    min-height: 38px;
+  }
+  .chips-input:focus-within { border-color: #2563eb; }
+  .chips-wrap { display: contents; }
+  .chips-input input {
+    flex: 1 1 120px;
+    min-width: 100px;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    font-size: 13px;
+    padding: 4px 2px;
+    outline: none;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(37,99,235,.18);
+    border: 1px solid rgba(37,99,235,.45);
+    color: var(--text);
+    border-radius: 999px;
+    padding: 2px 6px 2px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .02em;
+  }
+  .chip button {
+    all: unset;
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 2px;
+  }
+  .chip button:hover { color: #ef4444; }
   .tab-fields {
     display: flex;
     flex-wrap: wrap;
@@ -735,7 +781,16 @@
           <summary>Lệnh cơ bản</summary>
           <div class="tab-group-body">
             <div class="tab-row">
-              <label class="tab-field"><span>Symbol</span><input id="entrySymbol" type="text" placeholder="XAUUSD" /></label>
+              <label class="tab-field" style="flex:1 1 100%;min-width:240px"><span>Symbols (chọn nhiều để tự duyệt)</span>
+                <div class="chips-input" id="entrySymbolsBox">
+                  <span id="entrySymbolChips" class="chips-wrap"></span>
+                  <input id="entrySymbolInput" type="text" list="entrySymbolOptions" placeholder="Gõ symbol rồi Enter (vd XAUUSD)" autocomplete="off"
+                    onkeydown="onEntrySymbolKey(event)" onchange="commitEntrySymbolInput()" onblur="commitEntrySymbolInput()" />
+                </div>
+                <datalist id="entrySymbolOptions"></datalist>
+              </label>
+            </div>
+            <div class="tab-row">
               <label class="tab-field"><span>Hướng</span>
                 <select id="entrySide"><option value="BUY">BUY</option><option value="SELL">SELL</option><option value="BOTH">Cả hai (theo chỉ báo/ML)</option></select>
               </label>
@@ -2029,6 +2084,47 @@ function updateEntryTriggerFields() {
 // never wipes the weights. Populated on load and after training.
 let entryMlModel = null;
 
+// --- Multi-symbol chips for the entry tab ---
+let entrySymbols = [];
+
+function renderEntrySymbolChips() {
+  const wrap = document.getElementById('entrySymbolChips');
+  if (!wrap) return;
+  wrap.innerHTML = entrySymbols.map(s =>
+    `<span class="chip">${s}<button type="button" title="Bỏ" onclick="removeEntrySymbol('${s}')">&times;</button></span>`
+  ).join('');
+}
+
+function addEntrySymbol(raw) {
+  (raw || '').split(/[,;\s]+/).forEach(part => {
+    const s = part.trim().toUpperCase();
+    if (s && !entrySymbols.includes(s)) entrySymbols.push(s);
+  });
+  renderEntrySymbolChips();
+}
+
+function removeEntrySymbol(sym) {
+  entrySymbols = entrySymbols.filter(s => s !== sym);
+  renderEntrySymbolChips();
+}
+
+function commitEntrySymbolInput() {
+  const input = document.getElementById('entrySymbolInput');
+  if (!input || !input.value.trim()) return;
+  addEntrySymbol(input.value);
+  input.value = '';
+}
+
+function onEntrySymbolKey(ev) {
+  if (ev.key === 'Enter' || ev.key === ',' || ev.key === ' ') {
+    ev.preventDefault();
+    commitEntrySymbolInput();
+  } else if (ev.key === 'Backspace' && !ev.target.value && entrySymbols.length) {
+    entrySymbols.pop();
+    renderEntrySymbolChips();
+  }
+}
+
 function renderMlStatus(ml) {
   ml = ml || {};
   const model = ml.model || entryMlModel;
@@ -2047,8 +2143,9 @@ function renderMlStatus(ml) {
 
 async function trainEntryMl() {
   if (!currentAccountId) return;
+  commitEntrySymbolInput();
   const body = {
-    symbol: (document.getElementById('entrySymbol').value || 'XAUUSD').trim().toUpperCase(),
+    symbol: entrySymbols[0] || 'XAUUSD',
     timeframe: document.getElementById('mlTimeframe').value,
     count: parseInt(document.getElementById('mlCount').value) || 1000,
     lookahead: parseInt(document.getElementById('mlLookahead').value) || 3,
@@ -2155,7 +2252,8 @@ function renderEntryStatus(status) {
   if (!el || !status) return;
   const on = status.enabled ? 'BẬT' : 'TẮT';
   const trig = status.last_trigger ? ` · gần nhất: ${status.last_trigger}` : '';
-  el.textContent = `${on} · ${status.symbol || '—'} ${status.side || ''} · ${status.open_on_symbol ?? 0} lệnh symbol · ${status.entries_today ?? 0} lần hôm nay${trig}`;
+  const openTotal = status.open_total ?? status.open_on_symbol ?? 0;
+  el.textContent = `${on} · ${status.symbol || '—'} ${status.side || ''} · ${openTotal} lệnh mở · ${status.entries_today ?? 0} lần hôm nay${trig}`;
   if (status.ml_proba != null) {
     el.textContent += ` · ML p(up)=${(status.ml_proba).toFixed(2)}`;
   }
@@ -2171,9 +2269,12 @@ function renderEntryStatus(status) {
 }
 
 function collectEntryConfig() {
+  commitEntrySymbolInput();
+  const syms = entrySymbols.length ? entrySymbols : ['XAUUSD'];
   return {
     enabled: document.getElementById('entryEnabled').checked,
-    symbol: (document.getElementById('entrySymbol').value || 'XAUUSD').trim().toUpperCase(),
+    symbol: syms[0],
+    symbols: syms,
     side: document.getElementById('entrySide').value,
     volume: parseFloat(document.getElementById('entryVolume').value) || 0.01,
     sltp_unit: document.getElementById('entrySltpUnit').value,
@@ -2208,7 +2309,10 @@ function collectEntryMl() {
 function applyEntryConfig(cfg, enabledFlag) {
   cfg = cfg || {};
   document.getElementById('entryEnabled').checked = !!enabledFlag;
-  document.getElementById('entrySymbol').value = cfg.symbol || 'XAUUSD';
+  entrySymbols = (Array.isArray(cfg.symbols) && cfg.symbols.length)
+    ? cfg.symbols.map(s => String(s).toUpperCase())
+    : (cfg.symbol ? [String(cfg.symbol).toUpperCase()] : ['XAUUSD']);
+  renderEntrySymbolChips();
   document.getElementById('entrySide').value = cfg.side || 'BUY';
   setRiskField('entryVolume', cfg.volume ?? 0.01);
   document.getElementById('entrySltpUnit').value = cfg.sltp_unit || 'points';
@@ -2294,6 +2398,8 @@ function renderSymbolOptions(symbols) {
     el.innerHTML = opts;
     if (symbols.includes(current)) el.value = current;
   }
+  const dl = document.getElementById('entrySymbolOptions');
+  if (dl) dl.innerHTML = opts;
 }
 
 function connectSymbolsWs() {

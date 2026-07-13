@@ -130,7 +130,8 @@ class RiskConfigRequest(BaseModel):
 
 class EntryConfigRequest(BaseModel):
     enabled: bool = False
-    symbol: str = "XAUUSD"
+    symbol: str = "XAUUSD"  # legacy single symbol (kept for back-compat)
+    symbols: list[str] = []  # preferred: list of symbols to scan
     side: Literal["BUY", "SELL", "BOTH"] = "BUY"
     volume: float = 0.01
     sltp_unit: Literal["points", "pips"] = "points"
