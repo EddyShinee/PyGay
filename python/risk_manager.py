@@ -11,6 +11,7 @@ from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
+import account_risk
 import db
 import telegram_notify
 from grid_jobs import sl_tp_from_points
@@ -93,7 +94,11 @@ class RiskConfig:
     trade_tp_usd: Optional[float] = None
     trade_sl_usd: Optional[float] = None
 
-    # Per-trade pip SL/TP on broker
+    # Unit for all price-distance fields below (SL/TP/trailing/break-even):
+    # "points" = raw broker points, "pips" = 10 points (standard 5/3-digit feed).
+    sltp_unit: str = "points"
+
+    # Per-trade SL/TP on broker (in sltp_unit)
     trade_tp_pips: Optional[float] = None
     trade_sl_pips: Optional[float] = None
 
@@ -149,21 +154,30 @@ class RiskManager:
         self._acting: bool = False
         self._last_trigger: Optional[str] = None
         self._close_time_fired_date: Optional[str] = None
-
-        self.reload_config()
+        self._loaded: bool = False
 
     @property
     def account_id(self) -> str:
         return self._session.account_id
 
-    def reload_config(self) -> None:
-        row = db.get_risk_config(self.account_id)
+    def _pip_factor(self) -> float:
+        """Points per configured unit: pips=10 points, points=1."""
+        return 10.0 if (self.config.sltp_unit or "points").lower() == "pips" else 1.0
+
+    async def reload_config(self) -> None:
+        """Load config from Supabase (blocking httpx call off the event loop)."""
+        try:
+            row = await asyncio.to_thread(account_risk.get_risk_config, self.account_id)
+        except Exception:
+            logger.exception("[%s] load risk config failed - keeping current", self.account_id)
+            return
         if row is None:
             self.config = RiskConfig()
             self.enabled = False
-            return
-        self.config = RiskConfig.from_dict(row.get("config"))
-        self.enabled = bool(row.get("enabled"))
+        else:
+            self.config = RiskConfig.from_dict(row.get("config"))
+            self.enabled = bool(row.get("enabled"))
+        self._loaded = True
 
     def status(self) -> dict:
         account = self._session.account_store.snapshot()
@@ -424,17 +438,20 @@ class RiskManager:
                 continue
 
             market = bid if side == "BUY" else ask
-            profit_pips = (market - price_open) / point if side == "BUY" else (price_open - market) / point
+            # profit distance in the configured unit (points or pips)
+            unit = self._pip_factor()
+            profit_points = (market - price_open) / point if side == "BUY" else (price_open - market) / point
+            profit_units = profit_points / unit
 
             new_sl = current_sl
             new_tp = current_tp
             modified = False
 
-            # Initial pip SL/TP (once per ticket)
+            # Initial pip/point SL/TP (once per ticket)
             if ticket not in self._broker_sltp_applied:
                 if cfg.trade_sl_pips or cfg.trade_tp_pips:
-                    sl_p = cfg.trade_sl_pips or 0
-                    tp_p = cfg.trade_tp_pips or 0
+                    sl_p = (cfg.trade_sl_pips or 0) * unit
+                    tp_p = (cfg.trade_tp_pips or 0) * unit
                     calc_sl, calc_tp = sl_tp_from_points(side, price_open, sl_p, tp_p, point)
                     if calc_sl and (current_sl == 0 or abs(current_sl - calc_sl) > point):
                         new_sl = calc_sl
@@ -467,8 +484,8 @@ class RiskManager:
                         self._broker_sltp_applied.add(ticket)
 
             # Break-even
-            if cfg.breakeven_arm_pips is not None and profit_pips >= cfg.breakeven_arm_pips:
-                buffer = cfg.breakeven_buffer_pips * point
+            if cfg.breakeven_arm_pips is not None and profit_units >= cfg.breakeven_arm_pips:
+                buffer = cfg.breakeven_buffer_pips * unit * point
                 be_sl = price_open + buffer if side == "BUY" else price_open - buffer
                 if side == "BUY" and (current_sl == 0 or be_sl > current_sl):
                     new_sl = be_sl
@@ -479,12 +496,13 @@ class RiskManager:
 
             # Per-trade trailing
             if cfg.trade_trailing_arm_pips is not None and cfg.trade_trailing_distance_pips is not None:
-                peak = self._trade_peaks.get(ticket, profit_pips)
-                if profit_pips > peak:
-                    self._trade_peaks[ticket] = profit_pips
-                    peak = profit_pips
+                peak = self._trade_peaks.get(ticket, profit_units)
+                if profit_units > peak:
+                    self._trade_peaks[ticket] = profit_units
+                    peak = profit_units
                 if peak >= cfg.trade_trailing_arm_pips:
-                    trail_sl = market - cfg.trade_trailing_distance_pips * point if side == "BUY" else market + cfg.trade_trailing_distance_pips * point
+                    dist = cfg.trade_trailing_distance_pips * unit * point
+                    trail_sl = market - dist if side == "BUY" else market + dist
                     if side == "BUY" and (current_sl == 0 or trail_sl > current_sl):
                         new_sl = trail_sl
                         modified = True
@@ -541,14 +559,15 @@ class RiskManager:
 
 async def run_risk_supervisor(sessions: "SessionManager") -> None:
     """Background loop: evaluate risk rules for every connected account."""
-    from session_manager import SessionManager  # noqa: F811 - runtime import avoids cycle at module load
-
     logger.info("risk supervisor started")
     while True:
         try:
             for session in list(sessions.sessions.values()):
-                if session.connected and session.risk_manager.enabled:
-                    await session.risk_manager.evaluate()
+                rm = session.risk_manager
+                if not rm._loaded:
+                    await rm.reload_config()
+                if session.connected and rm.enabled:
+                    await rm.evaluate()
         except Exception:
             logger.exception("risk supervisor tick failed")
         await asyncio.sleep(SUPERVISOR_INTERVAL_S)

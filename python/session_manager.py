@@ -87,6 +87,8 @@ class SessionManager:
 
         session.info = info
         session.connected = True
+        if not session.risk_manager._loaded:
+            await session.risk_manager.reload_config()
         await self._notify()
 
         broker = info.get("broker", "")

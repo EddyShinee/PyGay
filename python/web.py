@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from session_manager import SessionManager, AccountSession
 import account_links
+import account_risk
 import auth
 import history
 import telegram_notify
@@ -110,6 +111,7 @@ class RiskConfigRequest(BaseModel):
     close_before_weekend: bool = False
     trade_tp_usd: Optional[float] = None
     trade_sl_usd: Optional[float] = None
+    sltp_unit: Literal["points", "pips"] = "points"
     trade_tp_pips: Optional[float] = None
     trade_sl_pips: Optional[float] = None
     atr_enabled: bool = False
@@ -538,7 +540,12 @@ def create_app(sessions: SessionManager) -> FastAPI:
     @protected.get("/api/{account_id}/risk")
     async def get_risk(account_id: str, request: Request):
         require_account_access(request, account_id)
-        row = db.get_risk_config(account_id)
+        try:
+            row = await asyncio.to_thread(account_risk.get_risk_config, account_id)
+        except account_risk.RiskConfigError as exc:
+            raise HTTPException(500, str(exc))
+        except account_risk.RiskUnavailable as exc:
+            raise HTTPException(503, str(exc))
         session = sessions.get(account_id)
         status = session.risk_manager.status() if session else {"enabled": False}
         if row is None:
@@ -556,10 +563,15 @@ def create_app(sessions: SessionManager) -> FastAPI:
         require_account_access(request, account_id)
         config = req.model_dump()
         enabled = bool(config.pop("enabled", False))
-        db.set_risk_config(account_id, enabled, config)
+        try:
+            await asyncio.to_thread(account_risk.set_risk_config, account_id, enabled, config)
+        except account_risk.RiskConfigError as exc:
+            raise HTTPException(400, str(exc))
+        except account_risk.RiskUnavailable as exc:
+            raise HTTPException(503, str(exc))
         session = sessions.get(account_id)
         if session is not None:
-            session.risk_manager.reload_config()
+            await session.risk_manager.reload_config()
             status = session.risk_manager.status()
         else:
             status = {"enabled": enabled}
@@ -568,10 +580,15 @@ def create_app(sessions: SessionManager) -> FastAPI:
     @protected.delete("/api/{account_id}/risk")
     async def delete_risk(account_id: str, request: Request):
         require_account_access(request, account_id)
-        removed = db.clear_risk_config(account_id)
+        try:
+            removed = await asyncio.to_thread(account_risk.clear_risk_config, account_id)
+        except account_risk.RiskConfigError as exc:
+            raise HTTPException(500, str(exc))
+        except account_risk.RiskUnavailable as exc:
+            raise HTTPException(503, str(exc))
         session = sessions.get(account_id)
         if session is not None:
-            session.risk_manager.reload_config()
+            await session.risk_manager.reload_config()
         return {"ok": True, "removed": removed}
 
     @protected.post("/api/{account_id}/history/fetch")
