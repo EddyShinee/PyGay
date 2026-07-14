@@ -477,9 +477,13 @@ def indicator_signal(key: str, bars: list[dict], params: dict) -> Optional[str]:
 
 
 def combine_signals(buys: int, sells: int, total: int, logic: str,
-                    min_agree: int = 1) -> Optional[str]:
+                    min_agree: int = 1, min_margin: int = 1) -> Optional[str]:
     """Combine per-indicator votes into one side. Shared by the live
-    EntryManager and the backtest so both always agree on semantics."""
+    EntryManager and the backtest so both always agree on semantics.
+
+    min_margin only applies to "majority": the winning side must lead by
+    at least this many votes (1 = classic majority, 2 = e.g. 3-1 wins but
+    3-2 doesn't) - filters out barely-split votes."""
     logic = (logic or "all").lower()
     if logic == "all":
         if buys == total:
@@ -499,8 +503,9 @@ def combine_signals(buys: int, sells: int, total: int, logic: str,
         if sells >= need and buys == 0:
             return "SELL"
     else:  # majority
-        if buys > sells:
+        margin = max(1, int(min_margin or 1))
+        if buys - sells >= margin:
             return "BUY"
-        if sells > buys:
+        if sells - buys >= margin:
             return "SELL"
     return None

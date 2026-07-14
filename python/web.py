@@ -157,6 +157,8 @@ class EntryConfigRequest(BaseModel):
     indicator_timeframe: str = "H1"
     indicator_logic: Literal["all", "any", "majority", "threshold"] = "all"
     indicator_min_agree: int = 2
+    indicator_min_margin: int = 1
+    confirm_bars: int = 1
     indicators: dict[str, Any] = {}
     ml: dict[str, Any] = {}
 

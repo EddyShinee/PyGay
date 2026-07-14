@@ -91,6 +91,13 @@ class EntryConfig:
     # For indicator_logic == "threshold": enter when >= this many indicators
     # agree on a direction AND none point the other way.
     indicator_min_agree: int = 2
+    # For indicator_logic == "majority": winning side must lead by at least
+    # this many votes (1 = classic majority; 2 filters out 3-2 splits).
+    indicator_min_margin: int = 1
+    # Require the combined indicator signal to persist this many CONSECUTIVE
+    # closed bars before entering (1 = enter on first bar). Filters signals
+    # that flash on one bar and vanish on the next.
+    confirm_bars: int = 1
     # { "rsi": {"enabled": true, "period": 14, ...}, ... }
     indicators: dict = field(default_factory=dict)
     # Machine-learning entry (trigger_mode == "ml"). Holds the trained model
@@ -148,6 +155,12 @@ class _SymState:
     # persists for the whole bar, so without this gate the same signal would
     # re-enter every cooldown_seconds until the bar closes.
     entered_bar_ts: Optional[int] = None
+    # Consecutive-closed-bar streak of the combined indicator signal, for
+    # the confirm_bars filter. Votes are kept for the status/UI display.
+    streak_side: Optional[str] = None
+    streak_count: int = 0
+    streak_bar_ts: Optional[int] = None
+    last_votes: tuple = (0, 0)  # (buys, sells) of the last computation
 
 
 class EntryManager:
@@ -251,6 +264,8 @@ class EntryManager:
             open_by_sym[s] = open_by_sym.get(s, 0) + 1
         total_open = len(positions)
 
+        ml_threshold = float((cfg.ml or {}).get("threshold", 0.58))
+
         per_symbol = {}
         for sym in symbols:
             st = self._sym.get(sym)
@@ -260,14 +275,30 @@ class EntryManager:
                 spread_pts = round(
                     (float(price["ask"]) - float(price["bid"])) / float(price["point"]), 1
                 )
+            # Combined verdicts for the UI's "Kết luận" column.
+            buys, sells = (st.last_votes if st else (0, 0))
+            ind_side = st.streak_side if st else None
+            ml_side = None
+            proba = st.last_ml_proba if st else None
+            if proba is not None:
+                if proba >= ml_threshold:
+                    ml_side = "BUY"
+                elif proba <= 1 - ml_threshold:
+                    ml_side = "SELL"
             per_symbol[sym] = {
                 "open": open_by_sym.get(sym, 0),
                 "last_trigger": st.last_trigger if st else None,
                 "last_ask": st.last_ask if st else None,
                 "last_bid": st.last_bid if st else None,
                 "spread_points": spread_pts,
-                "ml_proba": st.last_ml_proba if st else None,
+                "ml_proba": proba,
+                "ml_side": ml_side,
                 "indicator_signals": dict(st.last_signals) if st else {},
+                "indicator_side": ind_side,
+                "votes_buy": buys,
+                "votes_sell": sells,
+                "streak_count": st.streak_count if st else 0,
+                "confirm_bars": max(1, int(cfg.confirm_bars or 1)),
                 "blockers": self._symbol_blockers(
                     cfg, sym, st, open_by_sym.get(sym, 0), total_open, spread_pts
                 ) if self.enabled else [],
@@ -526,17 +557,42 @@ class EntryManager:
 
         logic = (cfg.indicator_logic or "all").lower()
         side = indicators.combine_signals(
-            buys, sells, len(enabled), logic, cfg.indicator_min_agree
+            buys, sells, len(enabled), logic,
+            cfg.indicator_min_agree, cfg.indicator_min_margin,
         )
+        st.last_votes = (buys, sells)
+
+        # Track how many CONSECUTIVE closed bars produced this same side -
+        # updated once per new bar (signals only change on bar close).
+        bar_ts = max_bar_ts or None
+        if bar_ts is not None and bar_ts != st.streak_bar_ts:
+            if side is not None and side == st.streak_side:
+                st.streak_count += 1
+            elif side is not None:
+                st.streak_side = side
+                st.streak_count = 1
+            else:
+                st.streak_side = None
+                st.streak_count = 0
+            st.streak_bar_ts = bar_ts
+        elif side != st.streak_side:
+            # Config changed mid-bar and flipped the outcome - restart.
+            st.streak_side = side
+            st.streak_count = 1 if side is not None else 0
+
         if side is None:
+            return None
+        need = max(1, int(cfg.confirm_bars or 1))
+        if st.streak_count < need:
             return None
         # Direction filter: BUY/SELL restricts to that side only; BOTH (or any
         # other value) accepts whichever direction the indicators produce.
         allowed = (cfg.side or "BOTH").upper()
         if allowed in ("BUY", "SELL") and side != allowed:
             return None
-        reason = f"Chỉ báo [{logic}] {', '.join(fired)} — {side}"
-        st.ind_cached = (side, reason, max_bar_ts or None)
+        confirm_note = f" ({st.streak_count} nến liên tiếp)" if need > 1 else ""
+        reason = f"Chỉ báo [{logic}] {', '.join(fired)} — {side}{confirm_note}"
+        st.ind_cached = (side, reason, bar_ts)
         return st.ind_cached
 
     async def _ml_signal(

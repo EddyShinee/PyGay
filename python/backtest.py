@@ -94,6 +94,7 @@ def _indicator_side(cfg: dict, bars: list) -> Optional[str]:
         buys, sells, len(enabled),
         cfg.get("indicator_logic") or "all",
         cfg.get("indicator_min_agree") or 1,
+        cfg.get("indicator_min_margin") or 1,
     )
 
 
@@ -197,26 +198,27 @@ def run_backtest(
     signals_total = 0
     blocked_trend = 0
     blocked_hours = 0
+    confirm_need = max(1, int(config.get("confirm_bars") or 1))
+    streak_side: Optional[str] = None
+    streak_count = 0
 
     for i in range(MIN_WARMUP, n - 1):
-        if only_if_flat and i <= open_until:
-            continue
-
         window = bars[max(0, i - SIGNAL_WINDOW + 1):i + 1]
 
         side: Optional[str] = None
-        if mode == "indicators":
+        if mode in ("indicators", "indicators_ml"):
             side = _indicator_side(config, window)
-        elif mode == "ml":
-            proba = predictor(window)
-            if proba is not None:
-                if proba >= threshold:
-                    side = "BUY"
-                elif proba <= 1 - threshold:
-                    side = "SELL"
-        else:  # indicators_ml: both must agree
-            side = _indicator_side(config, window)
-            if side is not None:
+            # Consecutive-bar confirmation applies to the INDICATOR verdict,
+            # before ML gets a veto - same order as the live EntryManager.
+            if side is not None and side == streak_side:
+                streak_count += 1
+            elif side is not None:
+                streak_side, streak_count = side, 1
+            else:
+                streak_side, streak_count = None, 0
+            if side is not None and streak_count < confirm_need:
+                side = None
+            if side is not None and mode == "indicators_ml":
                 proba = predictor(window)
                 ml_side = None
                 if proba is not None:
@@ -226,8 +228,17 @@ def run_backtest(
                         ml_side = "SELL"
                 if ml_side != side:
                     side = None
+        else:  # ml
+            proba = predictor(window)
+            if proba is not None:
+                if proba >= threshold:
+                    side = "BUY"
+                elif proba <= 1 - threshold:
+                    side = "SELL"
 
         if side is None:
+            continue
+        if only_if_flat and i <= open_until:
             continue
         if allowed in ("BUY", "SELL") and side != allowed:
             continue
