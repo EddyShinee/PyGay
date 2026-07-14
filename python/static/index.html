@@ -653,7 +653,7 @@
     .stat-grid { grid-template-columns: repeat(2, 1fr); }
     #summary { flex-wrap: wrap; row-gap: 10px; }
     #summary > span[style*="flex"] { display: none; }
-    #ticketFilter { width: 100% !important; }
+    #symbolFilter { width: 100% !important; }
     #toast { left: 16px; right: 16px; max-width: none; }
 
     /* 16px avoids iOS auto-zoom on focus; also enlarge touch targets */
@@ -1325,7 +1325,7 @@
         <span>Số lệnh: <b id="posCount">0</b></span>
         <span>Tổng lãi/lỗ: <b id="totalProfit">0.00</b></span>
         <span style="flex:1"></span>
-        <input id="ticketFilter" type="text" placeholder="Lọc theo ticket..." style="width:160px" oninput="renderPositions()" />
+        <input id="symbolFilter" type="text" placeholder="Lọc theo symbol..." style="width:160px" oninput="renderPositions()" />
       </div>
       <div id="symbolSummary" class="symbol-summary" style="display:none"></div>
       <div style="overflow-x:auto; margin-top:10px">
@@ -1957,9 +1957,9 @@ function renderPositions() {
   totalEl.className = lastTotalProfit >= 0 ? 'profit-pos' : 'profit-neg';
 
   let rows = lastPositions.slice();
-  const ticketFilter = document.getElementById('ticketFilter').value.trim();
-  if (ticketFilter) {
-    rows = rows.filter(p => String(p.ticket).includes(ticketFilter));
+  const symbolFilter = document.getElementById('symbolFilter').value.trim().toUpperCase();
+  if (symbolFilter) {
+    rows = rows.filter(p => String(p.symbol || '').toUpperCase().includes(symbolFilter));
   }
   if (sortField) {
     rows.sort((a, b) => {
