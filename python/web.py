@@ -113,6 +113,9 @@ class RiskConfigRequest(BaseModel):
     max_total_lot: Optional[float] = None
     close_time: Optional[str] = None
     close_before_weekend: bool = False
+    symbol_tp_usd: Optional[float] = None
+    symbol_sl_usd: Optional[float] = None
+    symbol_rules: list[dict[str, Any]] = []
     trade_tp_usd: Optional[float] = None
     trade_sl_usd: Optional[float] = None
     sltp_unit: Literal["points", "pips"] = "points"

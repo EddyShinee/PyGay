@@ -296,6 +296,14 @@
   .bar-fill { height: 100%; border-radius: 3px; opacity: .85; }
   .row-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: nowrap; }
   .row-actions button { padding: 6px 10px; font-size: 12px; white-space: nowrap; min-height: 0; }
+  .risk-symbol-rules { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+  .risk-symbol-rule {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end;
+    padding: 10px; border: 1px solid var(--border); border-radius: 8px;
+    background: rgba(255,255,255,.015);
+  }
+  .risk-symbol-rule .tab-field { flex: 1 1 100px; min-width: 80px; }
+  .risk-symbol-rule .rsr-remove { flex: 0 0 auto; padding: 8px 12px; min-height: 0; font-size: 12px; }
   #summary { display: flex; gap: 20px; font-size: 13px; color: var(--muted); }
   #summary b { color: var(--text); }
   .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5);
@@ -643,6 +651,9 @@
     }
     .tab-field > span { white-space: normal; }
     .tab-row > button { width: 100%; }
+    .risk-symbol-rule { flex-direction: column; align-items: stretch; }
+    .risk-symbol-rule .tab-field { width: 100% !important; flex: 0 0 auto !important; }
+    .risk-symbol-rule .rsr-remove { width: 100%; }
     .tab-inline { width: 100%; }
     .tab-inline > * { flex: 1 1 auto; }
     .tab-inline > button { flex: 1 1 100%; }
@@ -1223,6 +1234,17 @@
               <span>Đóng trước cuối tuần (T6 20:00)</span>
             </label>
           </div>
+        </div>
+        <div class="tab-section">
+          <div class="tab-section-title">Mức từng cặp tiền (Symbol)</div>
+          <p class="tab-hint" style="margin-top:0">Xét P/L trôi <b>riêng từng symbol</b>. Symbol chạm TP/SL sẽ đóng toàn bộ lệnh của symbol đó — không ảnh hưởng cặp khác.</p>
+          <div class="tab-row">
+            <label class="tab-field"><span>TP mặc định mọi symbol (USD)</span><input id="riskSymbolTpUsd" type="number" step="0.01" placeholder="vd: 10" /></label>
+            <label class="tab-field"><span>SL mặc định mọi symbol (USD)</span><input id="riskSymbolSlUsd" type="number" step="0.01" placeholder="vd: 30" /></label>
+          </div>
+          <div class="tab-section-title" style="margin-top:12px;font-size:11px">Tùy chỉnh riêng từng cặp</div>
+          <div id="riskSymbolRulesList" class="risk-symbol-rules"></div>
+          <button type="button" class="secondary" style="margin-top:8px" onclick="addRiskSymbolRule()">+ Thêm cặp</button>
         </div>
         <div class="tab-section">
           <div class="tab-section-title">Mức từng lệnh</div>
@@ -2255,7 +2277,48 @@ function renderRiskStatus(status) {
   const on = status.enabled ? 'BẬT' : 'TẮT';
   const trail = status.trailing_armed ? ' · trailing armed' : '';
   const trig = status.last_trigger ? ` · gần nhất: ${status.last_trigger}` : '';
-  el.textContent = `${on} · P/L trôi: ${status.floating_profit ?? '—'} · ${status.open_positions ?? 0} lệnh${trail}${trig}`;
+  const perSym = status.per_symbol && Object.keys(status.per_symbol).length
+    ? ' · ' + Object.entries(status.per_symbol).map(([s, p]) => `${s}:${p}`).join(' ')
+    : '';
+  el.textContent = `${on} · P/L trôi: ${status.floating_profit ?? '—'} · ${status.open_positions ?? 0} lệnh${perSym}${trail}${trig}`;
+}
+
+function renderRiskSymbolRules(rules) {
+  const box = document.getElementById('riskSymbolRulesList');
+  if (!box) return;
+  box.innerHTML = '';
+  (rules || []).forEach(r => addRiskSymbolRule(r));
+}
+
+function addRiskSymbolRule(data) {
+  data = data || {};
+  const box = document.getElementById('riskSymbolRulesList');
+  if (!box) return;
+  const row = document.createElement('div');
+  row.className = 'risk-symbol-rule';
+  row.innerHTML = `
+    <label class="tab-field"><span>Symbol</span><input class="rsr-symbol" type="text" placeholder="XAUUSD" value="${(data.symbol || '').replace(/"/g, '&quot;')}" /></label>
+    <label class="tab-field"><span>TP (USD)</span><input class="rsr-tp" type="number" step="0.01" placeholder="mặc định" value="${data.tp_usd != null ? data.tp_usd : ''}" /></label>
+    <label class="tab-field"><span>SL (USD)</span><input class="rsr-sl" type="number" step="0.01" placeholder="mặc định" value="${data.sl_usd != null ? data.sl_usd : ''}" /></label>
+    <label class="tab-field" style="flex-direction:row;align-items:center;gap:6px;padding-bottom:2px">
+      <input class="rsr-enabled" type="checkbox" ${data.enabled !== false ? 'checked' : ''} /><span>Bật</span>
+    </label>
+    <button type="button" class="secondary rsr-remove" onclick="this.closest('.risk-symbol-rule').remove()">Xóa</button>
+  `;
+  box.appendChild(row);
+}
+
+function collectRiskSymbolRules() {
+  return [...document.querySelectorAll('.risk-symbol-rule')].map(row => {
+    const tp = row.querySelector('.rsr-tp').value.trim();
+    const sl = row.querySelector('.rsr-sl').value.trim();
+    return {
+      symbol: row.querySelector('.rsr-symbol').value.trim().toUpperCase(),
+      tp_usd: tp ? parseFloat(tp) : null,
+      sl_usd: sl ? parseFloat(sl) : null,
+      enabled: row.querySelector('.rsr-enabled').checked,
+    };
+  }).filter(r => r.symbol);
 }
 
 // ---- Import / Export cấu hình JSON (entry, risk, manage) ----
@@ -2389,6 +2452,9 @@ function collectRiskConfig() {
     max_total_lot: riskNum('riskMaxLot'),
     close_time: document.getElementById('riskCloseTime').value.trim() || null,
     close_before_weekend: document.getElementById('riskCloseWeekend').checked,
+    symbol_tp_usd: riskNum('riskSymbolTpUsd'),
+    symbol_sl_usd: riskNum('riskSymbolSlUsd'),
+    symbol_rules: collectRiskSymbolRules(),
     trade_tp_usd: riskNum('riskTradeTpUsd'),
     trade_sl_usd: riskNum('riskTradeSlUsd'),
     sltp_unit: document.getElementById('riskSltpUnit').value,
@@ -2430,6 +2496,9 @@ function applyRiskConfig(cfg, enabledFlag) {
   setRiskField('riskMaxLot', cfg.max_total_lot);
   document.getElementById('riskCloseTime').value = cfg.close_time || '';
   document.getElementById('riskCloseWeekend').checked = !!cfg.close_before_weekend;
+  setRiskField('riskSymbolTpUsd', cfg.symbol_tp_usd);
+  setRiskField('riskSymbolSlUsd', cfg.symbol_sl_usd);
+  renderRiskSymbolRules(cfg.symbol_rules || []);
   setRiskField('riskTradeTpUsd', cfg.trade_tp_usd);
   setRiskField('riskTradeSlUsd', cfg.trade_sl_usd);
   document.getElementById('riskSltpUnit').value = cfg.sltp_unit || 'points';

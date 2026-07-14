@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -89,6 +89,12 @@ class RiskConfig:
     # Time-based
     close_time: Optional[str] = None  # "HH:MM" local
     close_before_weekend: bool = False
+
+    # Per-symbol floating P/L (close all positions on that symbol only)
+    symbol_tp_usd: Optional[float] = None  # default TP for every symbol
+    symbol_sl_usd: Optional[float] = None  # default SL for every symbol
+    # Overrides: [{"symbol": "XAUUSD", "tp_usd": 10, "sl_usd": 30, "enabled": true}, ...]
+    symbol_rules: list = field(default_factory=list)
 
     # Per-trade USD (server-monitored close)
     trade_tp_usd: Optional[float] = None
@@ -188,6 +194,7 @@ class RiskManager:
             "acting": self._acting,
             "last_trigger": self._last_trigger,
             "floating_profit": round(total, 2),
+            "per_symbol": {s: round(p, 2) for s, p in self._session.store.totals_by_symbol().items()},
             "trailing_armed": self._trailing_armed,
             "peak_profit": round(self._peak_profit, 2),
             "open_positions": len(self._session.store.snapshot()),
@@ -211,6 +218,9 @@ class RiskManager:
 
         triggered = await self._check_account_rules(positions, account, total)
         if triggered:
+            return
+
+        if await self._check_symbol_rules():
             return
 
         await self._check_trade_usd_rules(positions)
@@ -352,6 +362,70 @@ class RiskManager:
                 return "Đóng lệnh trước cuối tuần (Thứ 6 sau 20:00)"
 
         return None
+
+    def _symbol_limits(self, symbol: str) -> tuple[Optional[float], Optional[float], bool]:
+        """Return (tp_usd, sl_usd, enabled) for a symbol — override wins over defaults."""
+        cfg = self.config
+        sym = symbol.upper()
+        has_global = cfg.symbol_tp_usd is not None or cfg.symbol_sl_usd is not None
+
+        for rule in cfg.symbol_rules or []:
+            if not isinstance(rule, dict):
+                continue
+            if (rule.get("symbol") or "").upper() != sym:
+                continue
+            if rule.get("enabled") is False:
+                return None, None, False
+            tp = rule.get("tp_usd")
+            sl = rule.get("sl_usd")
+            return (
+                float(tp) if tp is not None else cfg.symbol_tp_usd,
+                float(sl) if sl is not None else cfg.symbol_sl_usd,
+                True,
+            )
+
+        if has_global:
+            return cfg.symbol_tp_usd, cfg.symbol_sl_usd, True
+        return None, None, False
+
+    async def _check_symbol_rules(self) -> bool:
+        """Close all positions on a symbol when that symbol's net floating P/L hits TP/SL."""
+        cfg = self.config
+        if not (cfg.symbol_tp_usd or cfg.symbol_sl_usd or cfg.symbol_rules):
+            return False
+
+        for sym, pnl in self._session.store.totals_by_symbol().items():
+            tp, sl, active = self._symbol_limits(sym)
+            if not active or (tp is None and sl is None):
+                continue
+            reason: Optional[str] = None
+            if tp is not None and pnl >= tp:
+                reason = f"{sym} lãi {pnl:.2f} USD (TP {tp})"
+            elif sl is not None and pnl <= -abs(sl):
+                reason = f"{sym} lỗ {pnl:.2f} USD (SL {sl})"
+            if reason:
+                await self._execute_symbol_close(sym, reason, pnl)
+                return True
+        return False
+
+    async def _execute_symbol_close(self, symbol: str, reason: str, pnl: float) -> None:
+        self._acting = True
+        self._last_action_ts = time.monotonic()
+        self._last_trigger = reason
+        try:
+            result = await self._session.gateway.close_all("all", symbol)
+            if result.get("ok"):
+                logger.info("[%s] risk close symbol %s: %s", self.account_id, symbol, reason)
+                await telegram_notify.notify(
+                    self.account_id,
+                    telegram_notify.format_risk_triggered(
+                        self.account_id, reason, f"P/L {symbol}: {pnl:.2f} USD"
+                    ),
+                )
+            else:
+                logger.warning("[%s] risk close %s failed: %s", self.account_id, symbol, result.get("error"))
+        finally:
+            self._acting = False
 
     async def _execute_account_close(self, reason: str, close_filter: str, total: float) -> None:
         self._acting = True
