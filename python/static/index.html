@@ -938,6 +938,8 @@
         <div class="tab-actions">
           <button onclick="withButtonLoading(this, saveEntryConfig)">Lưu cấu hình vào lệnh</button>
           <button class="secondary" onclick="withButtonLoading(this, loadEntryConfig)">Làm mới</button>
+          <button class="secondary" type="button" onclick="exportConfigJson('entry')">Xuất JSON</button>
+          <button class="secondary" type="button" onclick="importConfigJson('entry')">Nhập JSON</button>
           <button class="danger" onclick="withButtonLoading(this, clearEntryConfig)">Xóa cấu hình</button>
         </div>
         <p class="tab-hint">EntryManager chạy nền khi EA online. Kích hoạt theo tick giá hoặc vòng lặp nền (lịch/interval).</p>
@@ -1059,6 +1061,8 @@
         <div class="tab-actions">
           <button onclick="withButtonLoading(this, saveManageConfig)">Lưu cấu hình quản lý</button>
           <button class="secondary" onclick="withButtonLoading(this, loadManageConfig)">Làm mới</button>
+          <button class="secondary" type="button" onclick="exportConfigJson('manage')">Xuất JSON</button>
+          <button class="secondary" type="button" onclick="importConfigJson('manage')">Nhập JSON</button>
           <button class="danger" onclick="withButtonLoading(this, clearManageConfig)">Xóa cấu hình</button>
         </div>
         <p class="tab-hint">⚠️ Các chiến lược nhồi lệnh (DCA/Grid/Martingale) làm tăng rủi ro nhanh. Luôn đặt Max tổng lot, Basket SL và chạy thử tài khoản demo trước.</p>
@@ -1189,6 +1193,8 @@
         <div class="tab-actions">
           <button onclick="withButtonLoading(this, saveRiskConfig)">Lưu cấu hình rủi ro</button>
           <button class="secondary" onclick="withButtonLoading(this, loadRiskConfig)">Làm mới</button>
+          <button class="secondary" type="button" onclick="exportConfigJson('risk')">Xuất JSON</button>
+          <button class="secondary" type="button" onclick="importConfigJson('risk')">Nhập JSON</button>
           <button class="danger" onclick="withButtonLoading(this, clearRiskConfig)">Xóa cấu hình</button>
         </div>
         <p class="tab-hint">RiskManager chạy nền liên tục khi EA online. SL/TP pip và ATR được đẩy lên sàn; các luật USD/trailing được server giám sát.</p>
@@ -2110,6 +2116,114 @@ function renderRiskStatus(status) {
   const trail = status.trailing_armed ? ' · trailing armed' : '';
   const trig = status.last_trigger ? ` · gần nhất: ${status.last_trigger}` : '';
   el.textContent = `${on} · P/L trôi: ${status.floating_profit ?? '—'} · ${status.open_positions ?? 0} lệnh${trail}${trig}`;
+}
+
+// ---- Import / Export cấu hình JSON (entry, risk, manage) ----
+const CONFIG_JSON_FORMAT = 'pygay-config';
+const CONFIG_JSON_VERSION = 1;
+const CONFIG_KIND_META = {
+  entry:  { label: 'Vào lệnh',     fileSlug: 'entry',  collect: () => collectEntryConfig(),  apply: (p) => applyEntryConfig(omitEnabled(p), !!p.enabled) },
+  risk:   { label: 'Rủi ro',       fileSlug: 'risk',   collect: () => collectRiskConfig(),   apply: (p) => applyRiskConfig(omitEnabled(p), !!p.enabled) },
+  manage: { label: 'Quản lý lệnh', fileSlug: 'manage', collect: () => collectManageConfig(), apply: (p) => { applyManageConfig(omitEnabled(p), !!p.enabled); renderManageBadges(); } },
+};
+
+function omitEnabled(obj) {
+  const out = { ...(obj || {}) };
+  delete out.enabled;
+  return out;
+}
+
+function downloadJsonFile(filename, obj) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function pickJsonFile() {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json,.json';
+    input.style.display = 'none';
+    input.onchange = () => {
+      const file = input.files && input.files[0];
+      input.remove();
+      if (!file) { reject(new Error('Không chọn file')); return; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          resolve({ name: file.name, data: JSON.parse(String(reader.result || '')) });
+        } catch (e) {
+          reject(new Error('File không phải JSON hợp lệ'));
+        }
+      };
+      reader.onerror = () => reject(new Error('Không đọc được file'));
+      reader.readAsText(file);
+    };
+    input.oncancel = () => { input.remove(); reject(new Error('cancelled')); };
+    document.body.appendChild(input);
+    input.click();
+  });
+}
+
+function normalizeImportedConfig(kind, raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('Nội dung JSON không đúng dạng object');
+  }
+  // Wrapped export: { format, kind, payload }
+  if (raw.format === CONFIG_JSON_FORMAT || raw.kind || raw.payload) {
+    if (raw.kind && raw.kind !== kind) {
+      throw new Error(`File này là cấu hình "${raw.kind}", không phải "${kind}"`);
+    }
+    if (raw.payload && typeof raw.payload === 'object') return raw.payload;
+  }
+  // API GET shape: { enabled, config: {...} }
+  if (raw.config && typeof raw.config === 'object') {
+    return { ...raw.config, enabled: !!raw.enabled };
+  }
+  // Flat collect*() / POST body
+  if ('enabled' in raw || Object.keys(raw).length > 0) return raw;
+  throw new Error('Không nhận diện được cấu hình trong file');
+}
+
+function exportConfigJson(kind) {
+  const meta = CONFIG_KIND_META[kind];
+  if (!meta) { toast('Loại cấu hình không hợp lệ', true); return; }
+  if (kind === 'entry') commitEntrySymbolInput();
+  const payload = meta.collect();
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  const account = currentAccountId || 'account';
+  const doc = {
+    format: CONFIG_JSON_FORMAT,
+    version: CONFIG_JSON_VERSION,
+    kind,
+    label: meta.label,
+    exported_at: new Date().toISOString(),
+    account_id: currentAccountId || null,
+    payload,
+  };
+  downloadJsonFile(`pygay-${meta.fileSlug}-${account}-${stamp}.json`, doc);
+  toast(`Đã xuất cấu hình ${meta.label}`);
+}
+
+async function importConfigJson(kind) {
+  const meta = CONFIG_KIND_META[kind];
+  if (!meta) { toast('Loại cấu hình không hợp lệ', true); return; }
+  try {
+    const { name, data } = await pickJsonFile();
+    const payload = normalizeImportedConfig(kind, data);
+    meta.apply(payload);
+    toast(`Đã nạp "${name}" vào form ${meta.label} — bấm Lưu để ghi lên server`);
+  } catch (e) {
+    if (e && e.message === 'cancelled') return;
+    toast(e.message || String(e), true);
+  }
 }
 
 function collectRiskConfig() {
