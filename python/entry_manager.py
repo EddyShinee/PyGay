@@ -638,9 +638,15 @@ class EntryManager:
             return None
         bar_ts = int(bars[-1]["time"])
 
-        proba = ml_entry.predict_proba(bars, model)
+        htf_bars = None
+        tf_cfg = cfg.trend_filter or {}
+        if tf_cfg.get("enabled"):
+            htf_tf = tf_cfg.get("timeframe") or "H4"
+            htf_bars = (await self._get_bars(symbol, htf_tf))[:-1] or None
+
+        proba = ml_entry.predict_proba(bars, model, htf_bars)
         st.last_ml_proba = proba
-        side = ml_entry.predict_signal(bars, model, threshold, cfg.side)
+        side = ml_entry.predict_signal(bars, model, threshold, cfg.side, htf_bars)
         if side is None:
             return None
         reason = f"ML[{model.get('algo', '?')}] p(up)={proba:.2f} ngưỡng {threshold:.2f} — {side}"

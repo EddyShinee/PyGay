@@ -39,16 +39,20 @@ MAX_BARS = 5000
 DEFAULT_EXIT_BARS = 10
 
 
-def _make_ml_predictor(model: dict) -> Optional[Callable[[list], Optional[float]]]:
+def _make_ml_predictor(
+    model: dict, htf_bars: Optional[list[dict]] = None,
+) -> Optional[Callable[[list], Optional[float]]]:
     """predict_proba equivalent with the booster decoded ONCE - decoding a
-    pickled tree model per bar would dominate the whole backtest."""
+    pickled tree model per bar would dominate the whole backtest.
+    `htf_bars` (optional) are the higher-timeframe bars used for the model's
+    htf-trend feature - same series the live trend filter fetches."""
     if not model:
         return None
     algo = str(model.get("algo") or "logistic").lower()
 
     if algo == "logistic" or (model.get("weights") and not model.get("booster_b64")):
         def predict_logistic(bars: list) -> Optional[float]:
-            return ml_entry.predict_proba(bars, model)  # cheap, no booster
+            return ml_entry.predict_proba(bars, model, htf_bars)  # cheap, no booster
         return predict_logistic
 
     b64 = model.get("booster_b64")
@@ -61,7 +65,7 @@ def _make_ml_predictor(model: dict) -> Optional[Callable[[list], Optional[float]
         return None
 
     def predict_tree(bars: list) -> Optional[float]:
-        row = ml_entry._latest_features(bars, model)
+        row = ml_entry._latest_features(bars, model, htf_bars)
         if row is None:
             return None
         try:
@@ -168,7 +172,7 @@ def run_backtest(
     predictor: Optional[Callable] = None
     threshold = float(ml_cfg.get("threshold", 0.58))
     if mode in ("ml", "indicators_ml"):
-        predictor = _make_ml_predictor(ml_cfg.get("model") or {})
+        predictor = _make_ml_predictor(ml_cfg.get("model") or {}, trend_bars)
         if predictor is None:
             raise ValueError("Chưa có mô hình ML đã huấn luyện trong cấu hình.")
 
