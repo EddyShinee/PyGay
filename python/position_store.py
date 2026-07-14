@@ -40,6 +40,39 @@ class PositionStore:
             totals[p.symbol] = totals.get(p.symbol, 0.0) + p.profit + p.swap
         return totals
 
+    def next_algo_index(
+        self,
+        symbol: str,
+        side: str,
+        algo: str,
+        *,
+        positions: Optional[list[dict]] = None,
+    ) -> int:
+        """Next 1-based index for `{Symbol}-{algo}-#{n}` on this symbol+side.
+
+        Also recognizes legacy `{algo}-#{n}` comments from older builds.
+        """
+        sym_u = symbol.upper()
+        side_u = side.upper()
+        prefixes = (f"{sym_u}-{algo}-#", f"{algo}-#")
+        rows = positions if positions is not None else self.snapshot()
+        max_n = 0
+        for p in rows:
+            if (p.get("symbol") or "").upper() != sym_u:
+                continue
+            if (p.get("side") or "").upper() != side_u:
+                continue
+            c = (p.get("comment") or "").strip()
+            for prefix in prefixes:
+                if not c.startswith(prefix):
+                    continue
+                try:
+                    max_n = max(max_n, int(c[len(prefix):]))
+                except ValueError:
+                    pass
+                break
+        return max_n + 1
+
     def get(self, ticket: int) -> Optional[Position]:
         return self._positions.get(ticket)
 

@@ -15,6 +15,7 @@ import indicators
 import ml_entry
 import telegram_notify
 from grid_jobs import sl_tp_from_points
+from models import format_order_comment
 
 if TYPE_CHECKING:
     from session_manager import AccountSession
@@ -667,7 +668,8 @@ class EntryManager:
             if self._entries_day != today:
                 self._entries_day = today
                 self._entries_today = 0
-            comment = f"Entry-#{self._entries_today + 1}"
+            idx = self._session.store.next_algo_index(symbol, side, "Entry")
+            comment = format_order_comment(symbol, "Entry", idx)
 
             result = await self._session.gateway.open_order(
                 symbol, side, cfg.volume, sl, tp, comment,

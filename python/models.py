@@ -2,6 +2,11 @@
 from dataclasses import dataclass, asdict
 
 
+def format_order_comment(symbol: str, algo: str, index: int) -> str:
+    """Broker order comment: `{Symbol}-{Algo}-#{n}` (e.g. ETHUSD-Entry-#1)."""
+    return f"{(symbol or '').upper()}-{algo}-#{int(index)}"
+
+
 @dataclass
 class Position:
     ticket: int

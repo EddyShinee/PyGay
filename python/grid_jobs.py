@@ -12,6 +12,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
+from models import format_order_comment
 from trade_gateway import TradeGateway
 
 logger = logging.getLogger("grid_jobs")
@@ -71,7 +72,9 @@ class GridJobManager:
                          comment_label: str = "Grid") -> dict:
         """Place order #1 immediately; register a job for the rest, if any."""
         sl, tp = sl_tp_from_points(side, price, sl_points, tp_points, point)
-        result = await self.gateway.open_order(symbol, side, volume, sl, tp, f"{comment_label}-#1")
+        result = await self.gateway.open_order(
+            symbol, side, volume, sl, tp, format_order_comment(symbol, comment_label, 1)
+        )
         if not result.get("ok"):
             return result
 
@@ -103,7 +106,8 @@ class GridJobManager:
 
             sl, tp = sl_tp_from_points(job.side, price, job.sl_points, job.tp_points, point)
             result = await self.gateway.open_order(
-                job.symbol, job.side, job.next_lot, sl, tp, f"{job.comment_label}-#{job.next_index}"
+                job.symbol, job.side, job.next_lot, sl, tp,
+                format_order_comment(job.symbol, job.comment_label, job.next_index),
             )
             if not result.get("ok"):
                 logger.warning("grid job %s order failed (%s) - stopping job", job.job_id, result.get("error"))

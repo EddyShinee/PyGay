@@ -12,6 +12,7 @@ from typing import Optional
 
 import db
 import telegram_notify
+from models import format_order_comment
 from session_manager import SessionManager
 
 logger = logging.getLogger("telegram_commands")
@@ -71,7 +72,9 @@ async def _execute_buy_sell(session, side: str, symbol: str, volume: float) -> d
         return {"ok": False, "error": "Lot phải > 0"}
     if session.price_cache.get(symbol) is None:
         return {"ok": False, "error": f"Chưa có giá cho {symbol}, chờ EA gửi tick"}
-    return await session.gateway.open_order(symbol, side, volume, comment="Telegram-#1")
+    return await session.gateway.open_order(
+        symbol, side, volume, comment=format_order_comment(symbol, "Telegram", 1)
+    )
 
 
 async def _execute_close(session, close_filter: str) -> dict:

@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Optional
 import account_manage
 import telegram_notify
 from grid_jobs import scaled_lot, sl_tp_from_points
+from models import format_order_comment
 
 if TYPE_CHECKING:
     from session_manager import AccountSession, SessionManager
@@ -378,8 +379,8 @@ class PositionManager:
                          count: int = 1, algo: str = "", start_index: int = 1) -> int:
         """Open `count` orders of the same side; returns how many succeeded.
 
-        Each order is tagged with a comment "{algo}-#{n}" so it is traceable in
-        the positions table and in MT4/MT5 history."""
+        Each order is tagged with a comment "{Symbol}-{algo}-#{n}" so it is
+        traceable in the positions table and in MT4/MT5 history."""
         if lot < MIN_LOT or count < 1:
             return 0
         self._acting = True
@@ -387,7 +388,7 @@ class PositionManager:
         opened = 0
         try:
             for i in range(count):
-                comment = f"{algo}-#{start_index + i}" if algo else ""
+                comment = format_order_comment(symbol, algo, start_index + i) if algo else ""
                 result = await self._session.gateway.open_order(symbol, side, lot, 0.0, 0.0, comment)
                 if result.get("ok"):
                     opened += 1
