@@ -879,8 +879,15 @@
         <details class="tab-group" id="entryGroupML" style="display:none" open>
           <summary>Machine Learning <span class="group-badge" id="mlBadge">chưa huấn luyện</span></summary>
           <div class="tab-group-body">
-            <p class="tab-hint" style="margin-top:0">Mô hình hồi quy logistic dự đoán giá tăng/giảm sau <i>N</i> nến từ dữ liệu lịch sử. Huấn luyện xong, hệ thống vào lệnh khi xác suất vượt ngưỡng. Hướng lệnh theo ô "Hướng" (Cả hai / BUY / SELL).</p>
+            <p class="tab-hint" style="margin-top:0">Mô hình dự đoán giá tăng/giảm sau <i>N</i> nến từ OHLC + chỉ báo. Mặc định dùng <b>XGBoost</b> (đề xuất); có thể chọn LightGBM hoặc Logistic. Độ chính xác hiển thị là <b>hold-out</b> (20% nến mới nhất), không phải in-sample. Hướng lệnh theo ô "Hướng".</p>
             <div class="tab-row">
+              <label class="tab-field"><span>Thuật toán</span>
+                <select id="mlAlgo" onchange="updateMlAlgoFields()">
+                  <option value="xgboost" selected>XGBoost (đề xuất)</option>
+                  <option value="lightgbm">LightGBM</option>
+                  <option value="logistic">Logistic Regression</option>
+                </select>
+              </label>
               <label class="tab-field"><span>Khung thời gian</span>
                 <select id="mlTimeframe">
                   <option value="M5">M5</option>
@@ -899,10 +906,15 @@
             </div>
             <div class="tab-section-title" style="margin-top:14px">Tham số huấn luyện</div>
             <div class="tab-row">
-              <label class="tab-field"><span>Số nến lịch sử</span><input id="mlCount" type="number" step="100" min="200" value="1000" /></label>
+              <label class="tab-field"><span>Số nến lịch sử</span><input id="mlCount" type="number" step="100" min="200" value="1500" /></label>
               <label class="tab-field"><span>Dự báo trước (nến)</span><input id="mlLookahead" type="number" step="1" min="1" value="3" /></label>
               <label class="tab-field"><span>Số return trễ (lags)</span><input id="mlLags" type="number" step="1" min="1" max="10" value="5" /></label>
-              <label class="tab-field"><span>Epochs</span><input id="mlEpochs" type="number" step="50" min="50" value="400" /></label>
+              <label class="tab-field" id="mlEpochsField"><span>Epochs (logistic)</span><input id="mlEpochs" type="number" step="50" min="50" value="400" /></label>
+            </div>
+            <div class="tab-row" id="mlTreeParams">
+              <label class="tab-field"><span>Số cây (n_estimators)</span><input id="mlNEstimators" type="number" step="50" min="50" value="200" /></label>
+              <label class="tab-field"><span>Độ sâu (max_depth)</span><input id="mlMaxDepth" type="number" step="1" min="2" max="8" value="4" /></label>
+              <label class="tab-field"><span>Learning rate</span><input id="mlLearningRate" type="number" step="0.01" min="0.01" max="0.5" value="0.05" /></label>
             </div>
             <div class="tab-actions" style="margin-top:12px">
               <button onclick="withButtonLoading(this, trainEntryMl)">Huấn luyện mô hình</button>
@@ -2282,6 +2294,14 @@ function onEntrySymbolKey(ev) {
   }
 }
 
+function updateMlAlgoFields() {
+  const algo = document.getElementById('mlAlgo')?.value || 'xgboost';
+  const tree = document.getElementById('mlTreeParams');
+  const epochs = document.getElementById('mlEpochsField');
+  if (tree) tree.style.display = (algo === 'xgboost' || algo === 'lightgbm') ? '' : 'none';
+  if (epochs) epochs.style.display = algo === 'logistic' ? '' : 'none';
+}
+
 function renderMlStatus(ml) {
   ml = ml || {};
   const model = ml.model || entryMlModel;
@@ -2289,9 +2309,16 @@ function renderMlStatus(ml) {
   const line = document.getElementById('mlStatusLine');
   if (model && model.trained_at) {
     const when = new Date(model.trained_at * 1000).toLocaleString();
+    const algo = (model.algo || ml.algo || 'logistic').toUpperCase();
     const acc = model.accuracy != null ? (model.accuracy * 100).toFixed(1) + '%' : '—';
-    if (badge) badge.textContent = `acc ${acc}`;
-    if (line) line.textContent = `Đã huấn luyện ${when} · ${model.samples || '?'} mẫu · độ chính xác (in-sample) ${acc} · dự báo ${model.lookahead} nến.`;
+    const trainAcc = model.train_accuracy != null ? (model.train_accuracy * 100).toFixed(1) + '%' : null;
+    const valAcc = model.val_accuracy != null ? (model.val_accuracy * 100).toFixed(1) + '%' : null;
+    if (badge) badge.textContent = `${algo} ${acc}`;
+    let detail = `Đã huấn luyện ${when} · ${algo} · ${model.samples || '?'} mẫu`;
+    if (valAcc) detail += ` · hold-out ${valAcc}`;
+    if (trainAcc) detail += ` · train ${trainAcc}`;
+    detail += ` · dự báo ${model.lookahead} nến.`;
+    if (line) line.textContent = detail;
   } else {
     if (badge) badge.textContent = 'chưa huấn luyện';
     if (line) line.textContent = 'Chưa có mô hình. Bấm "Huấn luyện" để tạo (EA cần online để lấy dữ liệu).';
@@ -2304,22 +2331,23 @@ async function trainEntryMl() {
   const body = {
     symbol: entrySymbols[0] || 'XAUUSD',
     timeframe: document.getElementById('mlTimeframe').value,
-    count: parseInt(document.getElementById('mlCount').value) || 1000,
+    count: parseInt(document.getElementById('mlCount').value) || 1500,
     lookahead: parseInt(document.getElementById('mlLookahead').value) || 3,
     lags: parseInt(document.getElementById('mlLags').value) || 5,
     threshold: parseFloat(document.getElementById('mlThreshold').value) || 0.58,
     epochs: parseInt(document.getElementById('mlEpochs').value) || 400,
+    algo: document.getElementById('mlAlgo').value || 'xgboost',
+    n_estimators: parseInt(document.getElementById('mlNEstimators').value) || 200,
+    max_depth: parseInt(document.getElementById('mlMaxDepth').value) || 4,
+    learning_rate: parseFloat(document.getElementById('mlLearningRate').value) || 0.05,
   };
   try {
     const data = await api(`/api/${currentAccountId}/entry/ml/train`, 'POST', body);
-    entryMlModel = {
-      trained_at: data.trained_at, accuracy: data.accuracy,
-      samples: data.samples, lookahead: body.lookahead,
-    };
     document.getElementById('mlEnabled').checked = true;
-    renderMlStatus({model: entryMlModel});
-    toast(`Đã huấn luyện: ${data.samples} mẫu, độ chính xác ${(data.accuracy * 100).toFixed(1)}%`);
-    loadEntryConfig();
+    const accPct = (data.accuracy * 100).toFixed(1);
+    const algo = (data.algo || body.algo || '').toUpperCase();
+    toast(`Đã huấn luyện ${algo}: ${data.samples} mẫu, hold-out ${accPct}%`);
+    await loadEntryConfig();
   } catch (e) { toast(e.message, true); }
 }
 
@@ -2458,8 +2486,9 @@ function collectEntryMl() {
     enabled: document.getElementById('mlEnabled').checked,
     timeframe: document.getElementById('mlTimeframe').value,
     threshold: parseFloat(document.getElementById('mlThreshold').value) || 0.58,
+    algo: document.getElementById('mlAlgo')?.value || 'xgboost',
   };
-  // Preserve the trained model (weights) so saving other settings won't wipe it.
+  // Preserve the trained model so saving other settings won't wipe it.
   if (entryMlModel) ml.model = entryMlModel;
   return ml;
 }
@@ -2499,7 +2528,13 @@ function applyEntryMl(ml) {
   document.getElementById('mlEnabled').checked = !!ml.enabled;
   document.getElementById('mlTimeframe').value = ml.timeframe || 'H1';
   setRiskField('mlThreshold', ml.threshold ?? 0.58);
+  const algoEl = document.getElementById('mlAlgo');
+  if (algoEl) {
+    const algo = ml.algo || (ml.model && ml.model.algo) || 'xgboost';
+    algoEl.value = ['logistic', 'xgboost', 'lightgbm'].includes(algo) ? algo : 'xgboost';
+  }
   entryMlModel = ml.model || null;
+  updateMlAlgoFields();
   renderMlStatus(ml);
 }
 

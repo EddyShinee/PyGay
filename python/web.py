@@ -164,6 +164,10 @@ class MLTrainRequest(BaseModel):
     lags: int = 5
     threshold: float = 0.58
     epochs: int = 400
+    algo: Literal["logistic", "xgboost", "lightgbm"] = "xgboost"
+    n_estimators: int = 200
+    max_depth: int = 4
+    learning_rate: float = 0.05
 
 
 class ManageConfigRequest(BaseModel):
@@ -808,8 +812,8 @@ def create_app(sessions: SessionManager) -> FastAPI:
 
     @protected.post("/api/{account_id}/entry/ml/train")
     async def train_entry_ml(account_id: str, req: MLTrainRequest, request: Request):
-        """Fetch history from the EA, train the logistic model, and store the
-        trained model inside the account's entry config (Supabase)."""
+        """Fetch history from the EA, train the selected ML model, and store
+        it inside the account's entry config (Supabase)."""
         session = get_session(account_id, request)
         require_connected(session)
         try:
@@ -820,7 +824,15 @@ def create_app(sessions: SessionManager) -> FastAPI:
             model = await asyncio.to_thread(
                 ml_entry.train,
                 bars,
-                {"lookahead": req.lookahead, "lags": req.lags, "epochs": req.epochs},
+                {
+                    "algo": req.algo,
+                    "lookahead": req.lookahead,
+                    "lags": req.lags,
+                    "epochs": req.epochs,
+                    "n_estimators": req.n_estimators,
+                    "max_depth": req.max_depth,
+                    "learning_rate": req.learning_rate,
+                },
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc))
@@ -840,6 +852,7 @@ def create_app(sessions: SessionManager) -> FastAPI:
             "enabled": ml_block.get("enabled", True),
             "timeframe": req.timeframe,
             "threshold": req.threshold,
+            "algo": req.algo,
             "model": model,
         })
         config["ml"] = ml_block
@@ -853,8 +866,13 @@ def create_app(sessions: SessionManager) -> FastAPI:
             await session.entry_manager.reload_config()
         return {
             "ok": True,
+            "algo": model.get("algo"),
             "samples": model["samples"],
+            "train_samples": model.get("train_samples"),
+            "val_samples": model.get("val_samples"),
             "accuracy": model["accuracy"],
+            "train_accuracy": model.get("train_accuracy"),
+            "val_accuracy": model.get("val_accuracy"),
             "up_rate": model["up_rate"],
             "trained_at": model["trained_at"],
             "feature_names": model["feature_names"],

@@ -458,7 +458,7 @@ class EntryManager:
         side = ml_entry.predict_signal(bars, model, threshold, cfg.side)
         if side is None:
             return None
-        reason = f"ML p(up)={proba:.2f} ngưỡng {threshold:.2f} — {side}"
+        reason = f"ML[{model.get('algo', '?')}] p(up)={proba:.2f} ngưỡng {threshold:.2f} — {side}"
         st.ml_cached = (side, reason)
         return st.ml_cached
 

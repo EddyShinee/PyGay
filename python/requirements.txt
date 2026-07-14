@@ -3,3 +3,7 @@ uvicorn[standard]
 itsdangerous
 httpx
 python-dotenv
+numpy
+scikit-learn
+xgboost
+lightgbm
