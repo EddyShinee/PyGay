@@ -247,6 +247,7 @@
   button:hover:not(:disabled) { filter: brightness(1.06); transform: translateY(-1px); }
   button:active:not(:disabled) { transform: translateY(0); }
   button:disabled { opacity: .45; cursor: not-allowed; filter: none; transform: none; }
+  button.is-offline { opacity: .45; cursor: not-allowed; filter: none; transform: none; }
   input, select {
     background: var(--bg-elevated);
     border: 1px solid var(--border-strong);
@@ -309,7 +310,7 @@
   .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
   #toast { position: fixed; bottom: 20px; right: 20px; background: var(--panel);
            border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px;
-           display: none; max-width: 360px; }
+           display: none; max-width: 360px; z-index: 100; }
   #toast.error { border-color: var(--red); color: var(--red); }
   #toast.show { display: block; }
   .empty { color: var(--muted); text-align: center; padding: 20px; }
@@ -759,9 +760,9 @@
         <div class="tab-section">
           <div class="tab-section-title">Đóng hàng loạt</div>
           <div class="tab-actions danger-zone">
-            <button class="secondary needs-connection" onclick="withButtonLoading(this, () => closeAll('profit'))">Đóng tất cả lệnh lãi</button>
-            <button class="secondary needs-connection" onclick="withButtonLoading(this, () => closeAll('loss'))">Đóng tất cả lệnh lỗ</button>
-            <button class="danger needs-connection" onclick="withButtonLoading(this, () => closeAll('all'))">Đóng tất cả</button>
+            <button type="button" class="secondary needs-connection" onclick="closeAllClicked(this, 'profit')">Đóng tất cả lệnh lãi</button>
+            <button type="button" class="secondary needs-connection" onclick="closeAllClicked(this, 'loss')">Đóng tất cả lệnh lỗ</button>
+            <button type="button" class="danger needs-connection" onclick="closeAllClicked(this, 'all')">Đóng tất cả</button>
           </div>
         </div>
         <div class="tab-section">
@@ -1399,7 +1400,11 @@ function toast(msg, isError) {
 // For buttons that live permanently in the DOM (control panel, modals) -
 // safe to mutate the element directly, nothing else re-renders it.
 async function withButtonLoading(btn, fn) {
-  if (!btn || btn.disabled) return;
+  if (!btn || btn.dataset.loading === 'true') return;
+  if (btn.classList.contains('needs-connection') && !currentAccountConnected) {
+    toast('EA chưa online — bật SocketBridgeEA trên MetaTrader trước', true);
+    return;
+  }
   const original = btn.textContent;
   btn.disabled = true;
   btn.dataset.loading = 'true';
@@ -1409,7 +1414,12 @@ async function withButtonLoading(btn, fn) {
   } finally {
     delete btn.dataset.loading;
     btn.textContent = original;
-    btn.disabled = btn.classList.contains('needs-connection') ? !currentAccountConnected : false;
+    // needs-connection buttons stay clickable (guarded above) so offline
+    // clicks can toast instead of silently doing nothing.
+    btn.disabled = false;
+    if (btn.classList.contains('needs-connection')) {
+      btn.classList.toggle('is-offline', !currentAccountConnected);
+    }
   }
 }
 
@@ -1453,7 +1463,13 @@ async function api(path, method, body) {
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data.detail || 'Có lỗi xảy ra');
+    let detail = data.detail;
+    if (Array.isArray(detail)) {
+      detail = detail.map(d => d.msg || JSON.stringify(d)).join('; ');
+    } else if (detail && typeof detail === 'object') {
+      detail = detail.msg || JSON.stringify(detail);
+    }
+    throw new Error(detail || 'Có lỗi xảy ra');
   }
   return data;
 }
@@ -1540,7 +1556,10 @@ function updateDetailHeader() {
 function updateActionAvailability() {
   document.querySelectorAll('.needs-connection').forEach(el => {
     if (el.dataset.loading === 'true') return; // don't fight an in-flight action's own state
-    el.disabled = !currentAccountConnected;
+    // Use a visual offline class instead of HTML disabled — disabled buttons
+    // swallow clicks entirely (no toast), which felt like “nothing happens”.
+    el.classList.toggle('is-offline', !currentAccountConnected);
+    el.disabled = false;
   });
   renderPositions();
 }
@@ -1898,10 +1917,30 @@ async function modifyPosition(ticket, sl, tp) {
   } catch (e) { toast(e.message, true); }
 }
 
+async function closeAllClicked(btn, filter) {
+  if (!currentAccountId) {
+    toast('Chưa chọn tài khoản', true);
+    return;
+  }
+  const labels = {
+    profit: 'tất cả lệnh ĐANG LÃI',
+    loss: 'tất cả lệnh ĐANG LỖ',
+    all: 'TẤT CẢ lệnh đang mở',
+  };
+  if (!confirm(`Xác nhận đóng ${labels[filter] || filter}?`)) return;
+  await withButtonLoading(btn, () => closeAll(filter));
+}
+
 async function closeAll(filter) {
   try {
-    await api(`/api/${currentAccountId}/positions/close_all`, 'POST', {filter});
-    toast('Đã gửi lệnh đóng');
+    const res = await api(`/api/${currentAccountId}/positions/close_all`, 'POST', {filter});
+    const closed = res.closed_count;
+    if (closed != null) {
+      toast(closed > 0 ? `Đã đóng ${closed} lệnh` : 'Không có lệnh nào khớp bộ lọc');
+    } else {
+      toast('Đã gửi lệnh đóng');
+    }
+    try { await refreshPositions(); } catch (_) { /* ignore */ }
   } catch (e) { toast(e.message, true); }
 }
 

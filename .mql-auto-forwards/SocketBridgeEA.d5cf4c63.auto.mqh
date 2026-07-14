@@ -16,7 +16,7 @@ void HandleMessage(CJson &msg);
 #line 207 "/Users/thuanvu/Documents/PyGay/mql5/Experts/SocketBridgeEA.mq5"
 bool ExecuteMarketOrder(const string side, const string symbol, const double volume, const double sl, const double tp, ulong &out_ticket);
 #line 224 "/Users/thuanvu/Documents/PyGay/mql5/Experts/SocketBridgeEA.mq5"
-void SendOrderResult(const string id, const bool ok, const ulong ticket, const string error);
+void SendOrderResult(const string id, const bool ok, const ulong ticket, const string error, const int closed_count = -1);
 #line 238 "/Users/thuanvu/Documents/PyGay/mql5/Experts/SocketBridgeEA.mq5"
 void HandleSignal(CJson &msg);
 #line 262 "/Users/thuanvu/Documents/PyGay/mql5/Experts/SocketBridgeEA.mq5"

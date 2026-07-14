@@ -286,7 +286,8 @@ bool ExecuteMarketOrder(const string side, const string symbol, const double vol
    return (out_ticket > 0);
 }
 
-void SendOrderResult(const string id, const bool ok, const int ticket, const string error)
+void SendOrderResult(const string id, const bool ok, const int ticket, const string error,
+                     const int closed_count = -1)
 {
    CJson msg;
    msg.AddString("type", "order_result");
@@ -294,6 +295,8 @@ void SendOrderResult(const string id, const bool ok, const int ticket, const str
    msg.AddBool("ok", ok);
    msg.AddInt("ticket", ticket);
    msg.AddString("error", error);
+   if(closed_count >= 0)
+      msg.AddInt("closed_count", closed_count);
    g_socket.Send(msg.Serialize() + "\n");
 }
 
@@ -350,6 +353,7 @@ void HandleCloseAll(CJson &msg)
 
    bool   all_ok = true;
    string last_error = "";
+   int    closed_count = 0;
 
    for(int i = OrdersTotal() - 1; i >= 0; i--)
    {
@@ -360,7 +364,7 @@ void HandleCloseAll(CJson &msg)
       if(only_symbol != "" && OrderSymbol() != only_symbol)
          continue;
 
-      double profit = OrderProfit() + OrderSwap();
+      double profit = OrderProfit() + OrderSwap() + OrderCommission();
       bool matches = (filter == "all") ||
                       (filter == "profit" && profit > 0) ||
                       (filter == "loss"   && profit < 0);
@@ -372,9 +376,11 @@ void HandleCloseAll(CJson &msg)
          all_ok = false;
          last_error = LastOrderError();
       }
+      else
+         closed_count++;
    }
 
-   SendOrderResult(id, all_ok, 0, last_error);
+   SendOrderResult(id, all_ok, 0, last_error, closed_count);
 }
 
 void HandleModifyPosition(CJson &msg)

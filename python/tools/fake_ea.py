@@ -175,7 +175,7 @@ async def main(account_id: str, ticket_start: int) -> None:
                 deal = ea.close_ticket(t)
                 if deal:
                     await send(deal)
-            await send({"type": "order_result", "id": req_id, "ok": True, "ticket": 0})
+            await send({"type": "order_result", "id": req_id, "ok": True, "ticket": 0, "closed_count": len(to_close)})
             await send_snapshot()
 
         elif msg_type == "modify_position":

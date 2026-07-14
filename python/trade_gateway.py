@@ -47,22 +47,23 @@ class TradeGateway:
             )
         return clients[-1] if clients else None
 
-    async def _send(self, message: dict) -> dict:
+    async def _send(self, message: dict, timeout: Optional[float] = None) -> dict:
         client = self._current_client()
         if client is None:
             return {"ok": False, "error": "no EA connected"}
 
         req_id = str(uuid.uuid4())
         message["id"] = req_id
-        future: asyncio.Future = asyncio.get_event_loop().create_future()
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
         self._pending[req_id] = future
+        wait_s = self.timeout if timeout is None else timeout
         try:
             await client.send(message)
-            return await asyncio.wait_for(future, timeout=self.timeout)
+            return await asyncio.wait_for(future, timeout=wait_s)
         except asyncio.TimeoutError:
             logger.warning(
                 "[%s] no response in %.0fs for %s (client=%s)",
-                self.account_id, self.timeout, message.get("type"), client.address,
+                self.account_id, wait_s, message.get("type"), client.address,
             )
             return {"ok": False, "error": "timeout waiting for EA response"}
         except Exception as exc:
@@ -82,7 +83,12 @@ class TradeGateway:
         return await self._send({"type": "close_position", "ticket": ticket})
 
     async def close_all(self, filter: str = "all", symbol: str = "") -> dict:
-        return await self._send({"type": "close_all", "filter": filter, "symbol": symbol})
+        # Closing many tickets one-by-one on the EA can exceed the default
+        # 10s order timeout — give bulk closes more room.
+        return await self._send(
+            {"type": "close_all", "filter": filter, "symbol": symbol},
+            timeout=max(self.timeout, 60.0),
+        )
 
     async def modify_position(self, ticket: int, sl: float, tp: float) -> dict:
         return await self._send({"type": "modify_position", "ticket": ticket, "sl": sl, "tp": tp})

@@ -268,7 +268,8 @@ bool ExecuteMarketOrder(const string side, const string symbol, const double vol
    return ok;
 }
 
-void SendOrderResult(const string id, const bool ok, const ulong ticket, const string error)
+void SendOrderResult(const string id, const bool ok, const ulong ticket, const string error,
+                     const int closed_count = -1)
 {
    CJson msg;
    msg.AddString("type", "order_result");
@@ -276,6 +277,8 @@ void SendOrderResult(const string id, const bool ok, const ulong ticket, const s
    msg.AddBool("ok", ok);
    msg.AddInt("ticket", (long)ticket);
    msg.AddString("error", error);
+   if(closed_count >= 0)
+      msg.AddInt("closed_count", closed_count);
    g_socket.Send(msg.Serialize() + "\n");
 }
 
@@ -338,6 +341,7 @@ void HandleCloseAll(CJson &msg)
 
    bool   all_ok    = true;
    string last_error = "";
+   int    closed_count = 0;
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -360,9 +364,11 @@ void HandleCloseAll(CJson &msg)
          all_ok = false;
          last_error = g_trade.ResultRetcodeDescription();
       }
+      else
+         closed_count++;
    }
 
-   SendOrderResult(id, all_ok, 0, last_error);
+   SendOrderResult(id, all_ok, 0, last_error, closed_count);
 }
 
 void HandleModifyPosition(CJson &msg)
