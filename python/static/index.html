@@ -760,9 +760,9 @@
         <div class="tab-section">
           <div class="tab-section-title">Đóng hàng loạt</div>
           <div class="tab-actions danger-zone">
-            <button type="button" class="secondary needs-connection" onclick="closeAllClicked(this, 'profit')">Đóng tất cả lệnh lãi</button>
-            <button type="button" class="secondary needs-connection" onclick="closeAllClicked(this, 'loss')">Đóng tất cả lệnh lỗ</button>
-            <button type="button" class="danger needs-connection" onclick="closeAllClicked(this, 'all')">Đóng tất cả</button>
+            <button type="button" id="btnCloseProfit" class="secondary needs-connection">Đóng tất cả lệnh lãi</button>
+            <button type="button" id="btnCloseLoss" class="secondary needs-connection">Đóng tất cả lệnh lỗ</button>
+            <button type="button" id="btnCloseAll" class="danger needs-connection">Đóng tất cả</button>
           </div>
         </div>
         <div class="tab-section">
@@ -1918,31 +1918,58 @@ async function modifyPosition(ticket, sl, tp) {
 }
 
 async function closeAllClicked(btn, filter) {
-  if (!currentAccountId) {
-    toast('Chưa chọn tài khoản', true);
-    return;
+  try {
+    if (!currentAccountId) {
+      toast('Chưa chọn tài khoản', true);
+      return;
+    }
+    if (!currentAccountConnected) {
+      toast('EA chưa online — bật SocketBridgeEA trên MetaTrader trước', true);
+      return;
+    }
+    // No native confirm(): browsers that blocked dialogs make confirm()
+    // return false immediately → looked like the button did nothing.
+    await withButtonLoading(btn, () => closeAll(filter));
+  } catch (e) {
+    toast(e.message || String(e), true);
   }
-  const labels = {
-    profit: 'tất cả lệnh ĐANG LÃI',
-    loss: 'tất cả lệnh ĐANG LỖ',
-    all: 'TẤT CẢ lệnh đang mở',
-  };
-  if (!confirm(`Xác nhận đóng ${labels[filter] || filter}?`)) return;
-  await withButtonLoading(btn, () => closeAll(filter));
 }
 
 async function closeAll(filter) {
+  toast(`Đang gửi lệnh đóng (${filter})...`);
   try {
     const res = await api(`/api/${currentAccountId}/positions/close_all`, 'POST', {filter});
     const closed = res.closed_count;
     if (closed != null) {
       toast(closed > 0 ? `Đã đóng ${closed} lệnh` : 'Không có lệnh nào khớp bộ lọc');
+    } else if (res.ok === false) {
+      toast(res.error || 'Đóng lệnh thất bại', true);
     } else {
       toast('Đã gửi lệnh đóng');
     }
     try { await refreshPositions(); } catch (_) { /* ignore */ }
-  } catch (e) { toast(e.message, true); }
+  } catch (e) {
+    toast(e.message || String(e), true);
+    throw e;
+  }
 }
+
+// Bind close-all buttons via addEventListener (more reliable than inline onclick).
+(function bindCloseAllButtons() {
+  const map = [
+    ['btnCloseProfit', 'profit'],
+    ['btnCloseLoss', 'loss'],
+    ['btnCloseAll', 'all'],
+  ];
+  for (const [id, filter] of map) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      closeAllClicked(el, filter);
+    });
+  }
+})();
 
 async function closeByThreshold() {
   const op = document.getElementById('thresholdOp').value;
@@ -1976,7 +2003,7 @@ async function quickOrder(side) {
 function openOrderModal() { document.getElementById('orderModal').classList.add('open'); }
 function closeOrderModal() { document.getElementById('orderModal').classList.remove('open'); }
 
-document.getElementById('f_lotmode').addEventListener('change', (e) => {
+document.getElementById('f_lotmode')?.addEventListener('change', (e) => {
   document.getElementById('lotValueWrap').style.display = e.target.value === 'none' ? 'none' : 'block';
 });
 
