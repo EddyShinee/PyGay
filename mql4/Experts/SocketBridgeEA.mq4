@@ -350,11 +350,16 @@ void HandleCloseAll(CJson &msg)
    string id     = msg.GetString("id");
    string filter = msg.GetString("filter", "all");
    string only_symbol = msg.GetString("symbol", "");
+   if(filter != "profit" && filter != "loss")
+      filter = "all";
 
    bool   all_ok = true;
    string last_error = "";
    int    closed_count = 0;
 
+   // Collect tickets first, then close — OrderClose shifts MODE_TRADES indices.
+   int tickets[];
+   ArrayResize(tickets, 0);
    for(int i = OrdersTotal() - 1; i >= 0; i--)
    {
       if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
@@ -371,7 +376,14 @@ void HandleCloseAll(CJson &msg)
       if(!matches)
          continue;
 
-      if(!CloseOrderTicket(OrderTicket()))
+      int n = ArraySize(tickets);
+      ArrayResize(tickets, n + 1);
+      tickets[n] = OrderTicket();
+   }
+
+   for(int i = 0; i < ArraySize(tickets); i++)
+   {
+      if(!CloseOrderTicket(tickets[i]))
       {
          all_ok = false;
          last_error = LastOrderError();
@@ -380,6 +392,9 @@ void HandleCloseAll(CJson &msg)
          closed_count++;
    }
 
+   Print("SocketBridgeEA: close_all filter=", filter,
+         " matched=", ArraySize(tickets),
+         " closed=", closed_count);
    SendOrderResult(id, all_ok, 0, last_error, closed_count);
 }
 

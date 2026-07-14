@@ -522,12 +522,65 @@ def create_app(sessions: SessionManager) -> FastAPI:
 
     @protected.post("/api/{account_id}/positions/close_all")
     async def close_all(account_id: str, req: CloseAllRequest, request: Request):
+        """Close matching open positions ticket-by-ticket.
+
+        Uses the same `close_position` path as the per-row Đóng button instead of
+        the EA's bulk `close_all` (which was returning ok without closing on some
+        brokers / MT builds). Filter is applied server-side from the live store.
+        """
         session = get_session(account_id, request)
         require_connected(session)
-        result = await session.gateway.close_all(req.filter)
-        if not result.get("ok"):
-            raise HTTPException(400, result.get("error", "close_all failed"))
-        return result
+
+        positions = session.store.snapshot()
+        to_close: list[dict] = []
+        for p in positions:
+            pnl = float(p.get("profit") or 0) + float(p.get("swap") or 0)
+            if req.filter == "profit" and pnl <= 0:
+                continue
+            if req.filter == "loss" and pnl >= 0:
+                continue
+            to_close.append(p)
+
+        if not to_close:
+            return {
+                "ok": True,
+                "closed_count": 0,
+                "failed": [],
+                "filter": req.filter,
+                "matched": 0,
+            }
+
+        closed = 0
+        failed: list[dict] = []
+        for p in to_close:
+            ticket = int(p["ticket"])
+            result = await session.gateway.close_position(ticket)
+            if result.get("ok"):
+                closed += 1
+            else:
+                failed.append({
+                    "ticket": ticket,
+                    "symbol": p.get("symbol"),
+                    "error": result.get("error") or "close failed",
+                })
+
+        # Force a fresh snapshot so the UI drops closed tickets promptly.
+        try:
+            await session.gateway.request_positions()
+        except Exception:
+            pass
+
+        if closed == 0 and failed:
+            raise HTTPException(400, failed[0]["error"])
+
+        return {
+            "ok": len(failed) == 0,
+            "closed_count": closed,
+            "failed": failed,
+            "filter": req.filter,
+            "matched": len(to_close),
+            "error": failed[0]["error"] if failed else "",
+        }
 
     @protected.post("/api/{account_id}/positions/close_by_threshold")
     async def close_by_threshold(account_id: str, req: CloseByThresholdRequest, request: Request):

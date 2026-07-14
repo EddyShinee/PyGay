@@ -1939,13 +1939,16 @@ async function closeAll(filter) {
   toast(`Đang gửi lệnh đóng (${filter})...`);
   try {
     const res = await api(`/api/${currentAccountId}/positions/close_all`, 'POST', {filter});
-    const closed = res.closed_count;
-    if (closed != null) {
-      toast(closed > 0 ? `Đã đóng ${closed} lệnh` : 'Không có lệnh nào khớp bộ lọc');
-    } else if (res.ok === false) {
-      toast(res.error || 'Đóng lệnh thất bại', true);
+    const closed = Number(res.closed_count || 0);
+    const failed = Array.isArray(res.failed) ? res.failed : [];
+    if (closed > 0 && failed.length === 0) {
+      toast(`Đã đóng ${closed} lệnh`);
+    } else if (closed > 0 && failed.length) {
+      toast(`Đã đóng ${closed} lệnh, ${failed.length} lệnh lỗi: ${failed[0].error || ''}`, true);
+    } else if (failed.length) {
+      toast(failed[0].error || 'Đóng lệnh thất bại', true);
     } else {
-      toast('Đã gửi lệnh đóng');
+      toast('Không có lệnh nào khớp bộ lọc (kiểm tra lãi/lỗ trên bảng)');
     }
     try { await refreshPositions(); } catch (_) { /* ignore */ }
   } catch (e) {

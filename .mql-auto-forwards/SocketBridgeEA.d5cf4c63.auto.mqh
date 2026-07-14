@@ -24,6 +24,8 @@ void HandleOpenOrder(CJson &msg);
 #line 276 "/Users/thuanvu/Documents/PyGay/mql5/Experts/SocketBridgeEA.mq5"
 void HandleClosePosition(CJson &msg);
 #line 285 "/Users/thuanvu/Documents/PyGay/mql5/Experts/SocketBridgeEA.mq5"
+bool CloseTicketReliable(const ulong ticket);
+#line 305 "/Users/thuanvu/Documents/PyGay/mql5/Experts/SocketBridgeEA.mq5"
 void HandleCloseAll(CJson &msg);
 #line 316 "/Users/thuanvu/Documents/PyGay/mql5/Experts/SocketBridgeEA.mq5"
 void HandleModifyPosition(CJson &msg);

@@ -324,12 +324,32 @@ void HandleOpenOrder(CJson &msg)
    SendOrderResult(id, ok, ticket, ok ? "" : g_trade.ResultRetcodeDescription());
 }
 
+bool CloseTicketReliable(const ulong ticket)
+{
+   if(!PositionSelectByTicket(ticket))
+   {
+      Print("SocketBridgeEA: PositionSelectByTicket failed for #", ticket);
+      return false;
+   }
+   string symbol = PositionGetString(POSITION_SYMBOL);
+   // Brokers differ on filling mode; set from the symbol before each close.
+   g_trade.SetExpertMagicNumber(g_magic);
+   g_trade.SetTypeFillingBySymbol(symbol);
+
+   if(g_trade.PositionClose(ticket))
+      return true;
+
+   Print("SocketBridgeEA: PositionClose(#", ticket, ") failed: ",
+         g_trade.ResultRetcode(), " ", g_trade.ResultRetcodeDescription());
+   return false;
+}
+
 void HandleClosePosition(CJson &msg)
 {
    string id     = msg.GetString("id");
    ulong  ticket = (ulong)msg.GetInt("ticket");
 
-   bool ok = g_trade.PositionClose(ticket);
+   bool ok = CloseTicketReliable(ticket);
    SendOrderResult(id, ok, ticket, ok ? "" : g_trade.ResultRetcodeDescription());
 }
 
@@ -338,15 +358,24 @@ void HandleCloseAll(CJson &msg)
    string id     = msg.GetString("id");
    string filter = msg.GetString("filter", "all");
    string only_symbol = msg.GetString("symbol", "");
+   // Treat unknown / empty filter as close-everything so a parse miss never
+   // silently matches zero tickets.
+   if(filter != "profit" && filter != "loss")
+      filter = "all";
 
-   bool   all_ok    = true;
+   bool   all_ok = true;
    string last_error = "";
    int    closed_count = 0;
 
+   // Collect tickets first — closing while iterating PositionsTotal is unsafe.
+   ulong tickets[];
+   ArrayResize(tickets, 0);
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0)
+         continue;
+      if(!PositionSelectByTicket(ticket))
          continue;
 
       if(only_symbol != "" && PositionGetString(POSITION_SYMBOL) != only_symbol)
@@ -359,7 +388,14 @@ void HandleCloseAll(CJson &msg)
       if(!matches)
          continue;
 
-      if(!g_trade.PositionClose(ticket))
+      int n = ArraySize(tickets);
+      ArrayResize(tickets, n + 1);
+      tickets[n] = ticket;
+   }
+
+   for(int i = 0; i < ArraySize(tickets); i++)
+   {
+      if(!CloseTicketReliable(tickets[i]))
       {
          all_ok = false;
          last_error = g_trade.ResultRetcodeDescription();
@@ -368,6 +404,10 @@ void HandleCloseAll(CJson &msg)
          closed_count++;
    }
 
+   Print("SocketBridgeEA: close_all filter=", filter,
+         " matched=", ArraySize(tickets),
+         " closed=", closed_count,
+         " ok=", all_ok);
    SendOrderResult(id, all_ok, 0, last_error, closed_count);
 }
 
