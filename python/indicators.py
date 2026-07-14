@@ -474,3 +474,33 @@ def indicator_signal(key: str, bars: list[dict], params: dict) -> Optional[str]:
         return fn(bars, merged)
     except Exception:
         return None
+
+
+def combine_signals(buys: int, sells: int, total: int, logic: str,
+                    min_agree: int = 1) -> Optional[str]:
+    """Combine per-indicator votes into one side. Shared by the live
+    EntryManager and the backtest so both always agree on semantics."""
+    logic = (logic or "all").lower()
+    if logic == "all":
+        if buys == total:
+            return "BUY"
+        if sells == total:
+            return "SELL"
+    elif logic == "any":
+        if buys > 0 and sells == 0:
+            return "BUY"
+        if sells > 0 and buys == 0:
+            return "SELL"
+    elif logic == "threshold":
+        # Need at least N agreeing AND nothing pointing the other way.
+        need = max(1, int(min_agree or 1))
+        if buys >= need and sells == 0:
+            return "BUY"
+        if sells >= need and buys == 0:
+            return "SELL"
+    else:  # majority
+        if buys > sells:
+            return "BUY"
+        if sells > buys:
+            return "SELL"
+    return None

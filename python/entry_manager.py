@@ -33,6 +33,29 @@ def _utc_today() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
+def in_trade_hours(spec: Optional[str], now: Optional[datetime] = None) -> bool:
+    """True if `now` falls inside a "HH:MM-HH:MM" window (local time).
+    Overnight windows ("22:00-06:00") wrap around midnight. Malformed
+    specs fail open (trade) so a typo never silently halts entries."""
+    if not spec or not spec.strip():
+        return True
+    try:
+        start_s, end_s = spec.split("-")
+        sh, sm = (int(x) for x in start_s.strip().split(":"))
+        eh, em = (int(x) for x in end_s.strip().split(":"))
+    except (ValueError, AttributeError):
+        return True
+    now = now or datetime.now()
+    cur = now.hour * 60 + now.minute
+    start = sh * 60 + sm
+    end = eh * 60 + em
+    if start == end:
+        return True
+    if start < end:
+        return start <= cur < end
+    return cur >= start or cur < end  # overnight window
+
+
 @dataclass
 class EntryConfig:
     enabled: bool = False
@@ -47,6 +70,16 @@ class EntryConfig:
     max_open_positions: Optional[int] = None
     max_entries_per_day: Optional[int] = None
     only_if_flat: bool = False
+    # Skip entries while spread is wider than this many points (None = off).
+    # Protects against entering during news spikes / rollover when the
+    # broker widens spread 10-20x and a market order fills terribly.
+    max_spread_points: Optional[float] = None
+    # Higher-timeframe trend filter: only BUY above the EMA, only SELL
+    # below it. {"enabled": bool, "timeframe": "H4", "ema_period": 200}
+    trend_filter: dict = field(default_factory=dict)
+    # Only enter inside this local-time window, e.g. "07:00-22:00".
+    # None/empty = trade around the clock.
+    trade_hours: Optional[str] = None
     # trigger_mode: schedule | price_above | price_below | interval | indicators
     trigger_mode: str = "schedule"
     schedule_time: Optional[str] = None  # HH:MM local
@@ -96,6 +129,9 @@ class _SymState:
     """Per-symbol runtime state so each symbol is scanned/cooled independently."""
     last_entry_ts: float = 0.0
     fail_until: float = 0.0
+    # True while this symbol's order is in flight - blocks re-entry on the
+    # same symbol without freezing the scan of every OTHER symbol.
+    acting: bool = False
     last_ask: Optional[float] = None
     last_bid: Optional[float] = None
     schedule_fired_date: Optional[str] = None
@@ -108,6 +144,10 @@ class _SymState:
     ml_cached: Optional[tuple] = None
     last_ml_proba: Optional[float] = None
     last_trigger: Optional[str] = None
+    # Closed-bar time of the last indicator/ML entry: a cross/oversold signal
+    # persists for the whole bar, so without this gate the same signal would
+    # re-enter every cooldown_seconds until the bar closes.
+    entered_bar_ts: Optional[int] = None
 
 
 class EntryManager:
@@ -117,6 +157,10 @@ class EntryManager:
         self.enabled = False
 
         self._acting: bool = False
+        # Orders currently awaiting an EA reply, across all symbols - counted
+        # into the max_open_positions guard so two symbols can't both slip
+        # past the limit while neither shows in the snapshot yet.
+        self._inflight: int = 0
         self._loaded: bool = False
         self._entries_day: str = ""
         self._entries_today: int = 0
@@ -168,6 +212,35 @@ class EntryManager:
             self.enabled = bool(row.get("enabled"))
         self._loaded = True
 
+    def _symbol_blockers(self, cfg: EntryConfig, sym: str, st: Optional[_SymState],
+                          open_count: int, total_open: int,
+                          spread_pts: Optional[float]) -> list[str]:
+        """Cheap synchronous checks mirroring evaluate()'s guards - so the
+        UI can show WHY a symbol isn't entering right now."""
+        now = time.monotonic()
+        out: list[str] = []
+        if st is not None:
+            if st.acting:
+                out.append("đang gửi lệnh")
+            backoff = st.fail_until - now
+            if backoff > 0:
+                out.append(f"backoff sau lỗi ({backoff:.0f}s)")
+            cooldown = cfg.cooldown_seconds - (now - st.last_entry_ts)
+            if st.last_entry_ts > 0 and cooldown > 0:
+                out.append(f"cooldown ({cooldown:.0f}s)")
+        if cfg.max_spread_points and spread_pts is not None and spread_pts > cfg.max_spread_points:
+            out.append(f"spread rộng ({spread_pts:.0f} > {cfg.max_spread_points:.0f})")
+        if not in_trade_hours(cfg.trade_hours):
+            out.append("ngoài giờ giao dịch")
+        if cfg.only_if_flat and open_count > 0:
+            out.append("đã có lệnh symbol này")
+        if cfg.max_open_positions is not None and total_open + self._inflight >= cfg.max_open_positions:
+            out.append(f"đủ max lệnh ({total_open}/{cfg.max_open_positions})")
+        if cfg.max_entries_per_day is not None and self._entries_day == _utc_today() \
+                and self._entries_today >= cfg.max_entries_per_day:
+            out.append(f"đủ max lần/ngày ({self._entries_today})")
+        return out
+
     def status(self) -> dict:
         cfg = self.config
         symbols = cfg.symbol_list()
@@ -176,17 +249,28 @@ class EntryManager:
         for p in positions:
             s = (p.get("symbol") or "").upper()
             open_by_sym[s] = open_by_sym.get(s, 0) + 1
+        total_open = len(positions)
 
         per_symbol = {}
         for sym in symbols:
             st = self._sym.get(sym)
+            price = self._session.price_cache.get(sym)
+            spread_pts = None
+            if price and float(price.get("point") or 0) > 0:
+                spread_pts = round(
+                    (float(price["ask"]) - float(price["bid"])) / float(price["point"]), 1
+                )
             per_symbol[sym] = {
                 "open": open_by_sym.get(sym, 0),
                 "last_trigger": st.last_trigger if st else None,
                 "last_ask": st.last_ask if st else None,
                 "last_bid": st.last_bid if st else None,
+                "spread_points": spread_pts,
                 "ml_proba": st.last_ml_proba if st else None,
                 "indicator_signals": dict(st.last_signals) if st else {},
+                "blockers": self._symbol_blockers(
+                    cfg, sym, st, open_by_sym.get(sym, 0), total_open, spread_pts
+                ) if self.enabled else [],
             }
 
         # First symbol drives the indicator badges / single-symbol UI fields.
@@ -219,13 +303,19 @@ class EntryManager:
         symbol = symbol.upper()
         if symbol not in cfg.symbol_list():
             return
-        if self._acting or point <= 0:
+        if point <= 0:
             return
         st = self._state(symbol)
+        if st.acting:
+            return
         now = time.monotonic()
         if now < st.fail_until:
             return
         if now - st.last_entry_ts < cfg.cooldown_seconds:
+            return
+        if cfg.max_spread_points and (ask - bid) / point > cfg.max_spread_points:
+            return
+        if not in_trade_hours(cfg.trade_hours):
             return
 
         prev_ask, prev_bid = st.last_ask, st.last_bid
@@ -235,17 +325,18 @@ class EntryManager:
             return
 
         side = cfg.side
+        bar_ts: Optional[int] = None
         mode = (cfg.trigger_mode or "").lower()
         if mode == "indicators":
             res = await self._indicator_signal(cfg, symbol, st)
             if not res:
                 return
-            side, reason = res
+            side, reason, bar_ts = res
         elif mode == "ml":
             res = await self._ml_signal(cfg, symbol, st)
             if not res:
                 return
-            side, reason = res
+            side, reason, bar_ts = res
         elif mode == "indicators_ml":
             # ML acts as a confirmation filter: indicators AND the model must
             # agree on the same direction before we enter.
@@ -257,12 +348,21 @@ class EntryManager:
                 return
             side = res_ind[0]
             reason = f"Chỉ báo + ML cùng {side} ({res_ml[1]})"
+            bar_ts = max(res_ind[2] or 0, res_ml[2] or 0) or None
         else:
             reason = self._check_trigger(cfg, symbol, st, bid, ask, prev_bid, prev_ask)
             if not reason:
                 return
 
-        await self._execute_entry(cfg, symbol, st, bid, ask, point, reason, side)
+        # One entry per closed bar: the same cross/oversold signal persists
+        # until the next bar closes, so don't re-enter on it after cooldown.
+        if bar_ts is not None and bar_ts == st.entered_bar_ts:
+            return
+
+        if not await self._trend_allows(cfg, symbol, side if side in ("BUY", "SELL") else "BUY"):
+            return
+
+        await self._execute_entry(cfg, symbol, st, bid, ask, point, reason, side, bar_ts)
 
     def _guards_ok(self, cfg: EntryConfig, symbol: str) -> bool:
         positions = self._session.store.snapshot()
@@ -270,7 +370,9 @@ class EntryManager:
 
         if cfg.only_if_flat and sym_pos:
             return False
-        if cfg.max_open_positions is not None and len(positions) >= cfg.max_open_positions:
+        # Count in-flight orders too: a just-sent order won't appear in the
+        # snapshot for up to ~1s, which would let a second symbol overshoot.
+        if cfg.max_open_positions is not None and len(positions) + self._inflight >= cfg.max_open_positions:
             return False
 
         today = _utc_today()
@@ -313,7 +415,10 @@ class EntryManager:
             if not cfg.interval_minutes or cfg.interval_minutes <= 0:
                 return None
             if st.last_entry_ts == 0:
-                return f"Interval {cfg.interval_minutes} phút — lần đầu"
+                # Arm the timer instead of firing immediately: a server
+                # restart must never place an instant surprise order.
+                st.last_entry_ts = time.monotonic()
+                return None
             elapsed = (time.monotonic() - st.last_entry_ts) / 60
             if elapsed >= cfg.interval_minutes:
                 return f"Interval {cfg.interval_minutes} phút — đủ chu kỳ"
@@ -334,6 +439,27 @@ class EntryManager:
             return None
 
         return None
+
+    async def _trend_allows(self, cfg: EntryConfig, symbol: str, side: str) -> bool:
+        """Higher-timeframe EMA filter: BUY only above the EMA, SELL only
+        below. Fails open when bars are unavailable so a history hiccup
+        doesn't silently stop all entries."""
+        tf_cfg = cfg.trend_filter or {}
+        if not tf_cfg.get("enabled"):
+            return True
+        tf = tf_cfg.get("timeframe") or "H4"
+        period = max(2, int(tf_cfg.get("ema_period") or 200))
+        bars = await self._get_bars(symbol, tf)
+        bars = bars[:-1]  # closed bars only, same rule as the signals
+        if len(bars) < period:
+            return True
+        closes = [float(b["close"]) for b in bars]
+        ema = indicators._ema_series(closes, period)[-1]
+        if ema is None:
+            return True
+        if side == "BUY":
+            return closes[-1] > ema
+        return closes[-1] < ema
 
     async def _get_bars(self, symbol: str, timeframe: str) -> list:
         cache_key = f"{symbol}:{timeframe}"
@@ -377,13 +503,18 @@ class EntryManager:
         buys = 0
         sells = 0
         fired: list[str] = []
+        max_bar_ts = 0
         for key, params in enabled:
             # Each indicator may override the common timeframe with its own.
             tf = (params.get("timeframe") or default_tf)
             bars = await self._get_bars(symbol, tf)
+            # Drop the forming (incomplete) bar: signals computed on it
+            # repaint - they appear mid-bar and vanish when the bar closes.
+            bars = bars[:-1]
             if len(bars) < 30:
                 st.last_signals[key] = None
                 continue
+            max_bar_ts = max(max_bar_ts, int(bars[-1]["time"]))
             sig = indicators.indicator_signal(key, bars, params)
             st.last_signals[key] = sig
             if sig == "BUY":
@@ -394,31 +525,9 @@ class EntryManager:
                 fired.append(f"{key}↓")
 
         logic = (cfg.indicator_logic or "all").lower()
-        total = len(enabled)
-        side: Optional[str] = None
-        if logic == "all":
-            if buys == total:
-                side = "BUY"
-            elif sells == total:
-                side = "SELL"
-        elif logic == "any":
-            if buys > 0 and sells == 0:
-                side = "BUY"
-            elif sells > 0 and buys == 0:
-                side = "SELL"
-        elif logic == "threshold":
-            # Need at least N agreeing AND nothing pointing the other way.
-            need = max(1, int(cfg.indicator_min_agree or 1))
-            if buys >= need and sells == 0:
-                side = "BUY"
-            elif sells >= need and buys == 0:
-                side = "SELL"
-        else:  # majority
-            if buys > sells:
-                side = "BUY"
-            elif sells > buys:
-                side = "SELL"
-
+        side = indicators.combine_signals(
+            buys, sells, len(enabled), logic, cfg.indicator_min_agree
+        )
         if side is None:
             return None
         # Direction filter: BUY/SELL restricts to that side only; BOTH (or any
@@ -427,7 +536,7 @@ class EntryManager:
         if allowed in ("BUY", "SELL") and side != allowed:
             return None
         reason = f"Chỉ báo [{logic}] {', '.join(fired)} — {side}"
-        st.ind_cached = (side, reason)
+        st.ind_cached = (side, reason, max_bar_ts or None)
         return st.ind_cached
 
     async def _ml_signal(
@@ -450,8 +559,12 @@ class EntryManager:
         tf = ml_cfg.get("timeframe") or model.get("timeframe") or "H1"
         threshold = float(ml_cfg.get("threshold", 0.58))
         bars = await self._get_bars(symbol, tf)
+        # Predict on the last CLOSED bar - the model was trained on completed
+        # bars, so feeding it a half-formed candle is a distribution mismatch.
+        bars = bars[:-1]
         if len(bars) < 30:
             return None
+        bar_ts = int(bars[-1]["time"])
 
         proba = ml_entry.predict_proba(bars, model)
         st.last_ml_proba = proba
@@ -459,7 +572,7 @@ class EntryManager:
         if side is None:
             return None
         reason = f"ML[{model.get('algo', '?')}] p(up)={proba:.2f} ngưỡng {threshold:.2f} — {side}"
-        st.ml_cached = (side, reason)
+        st.ml_cached = (side, reason, bar_ts)
         return st.ml_cached
 
     async def _execute_entry(
@@ -472,6 +585,7 @@ class EntryManager:
         point: float,
         reason: str,
         side: Optional[str] = None,
+        bar_ts: Optional[int] = None,
     ) -> None:
         side = (side or cfg.side or "BUY").upper()
         if side not in ("BUY", "SELL"):
@@ -479,6 +593,8 @@ class EntryManager:
             # for schedule/interval fall back to BUY so we never send BOTH.
             side = "BUY"
         self._acting = True
+        st.acting = True
+        self._inflight += 1
         self._last_trigger = f"{symbol}: {reason}"
         st.last_trigger = reason
         try:
@@ -486,6 +602,9 @@ class EntryManager:
             unit = self._unit_factor()
             sl_pts = (cfg.sl_distance or 0) * unit
             tp_pts = (cfg.tp_distance or 0) * unit
+            # Absolute SL/TP from our latest tick = fallback for older EAs;
+            # the distances travel too so a new EA recomputes from its own
+            # (fresher) price at send time.
             sl, tp = sl_tp_from_points(side, price, sl_pts, tp_pts, point)
 
             today = _utc_today()
@@ -495,10 +614,12 @@ class EntryManager:
             comment = f"Entry-#{self._entries_today + 1}"
 
             result = await self._session.gateway.open_order(
-                symbol, side, cfg.volume, sl, tp, comment
+                symbol, side, cfg.volume, sl, tp, comment,
+                sl_points=sl_pts, tp_points=tp_pts,
             )
             if result.get("ok"):
                 st.last_entry_ts = time.monotonic()
+                st.entered_bar_ts = bar_ts
                 self._entries_today += 1
                 logger.info("[%s] entry %s %s %.2f lot: %s", self.account_id, side, symbol, cfg.volume, reason)
                 await telegram_notify.notify(
@@ -512,13 +633,22 @@ class EntryManager:
                     ),
                 )
             else:
+                error = str(result.get("error") or "")
                 st.fail_until = time.monotonic() + FAIL_BACKOFF_S
+                if "timeout" in error.lower():
+                    # A timed-out order may still have FILLED on the broker
+                    # (the order_result just came back late) - apply the normal
+                    # cooldown + bar gate too so we never double-enter on it.
+                    st.last_entry_ts = time.monotonic()
+                    st.entered_bar_ts = bar_ts
                 logger.warning(
                     "[%s] entry failed on %s: %s (backoff %.0fs)",
-                    self.account_id, symbol, result.get("error"), FAIL_BACKOFF_S,
+                    self.account_id, symbol, error, FAIL_BACKOFF_S,
                 )
         finally:
             self._acting = False
+            st.acting = False
+            self._inflight = max(0, self._inflight - 1)
 
 
 async def run_entry_supervisor(sessions: "SessionManager") -> None:

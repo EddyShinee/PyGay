@@ -788,6 +788,18 @@
               <input type="checkbox" id="entryEnabled" />
               <span>Bật vào lệnh tự động cho tài khoản này</span>
             </label>
+            <div id="entryLiveWrap" style="display:none;overflow-x:auto;margin-top:10px">
+              <table class="responsive-table" style="width:100%">
+                <thead>
+                  <tr>
+                    <th>Symbol</th><th>Bid / Ask</th><th>Spread</th>
+                    <th>Tín hiệu</th><th>ML p(up)</th><th>Lệnh mở</th>
+                    <th>Trạng thái</th>
+                  </tr>
+                </thead>
+                <tbody id="entryLiveBody"></tbody>
+              </table>
+            </div>
           </div>
         </details>
         <details class="tab-group" open>
@@ -844,6 +856,32 @@
             <div class="tab-row" id="entryFieldInterval" style="display:none">
               <label class="tab-field"><span>Chu kỳ (phút)</span><input id="entryIntervalMin" type="number" step="1" min="1" /></label>
             </div>
+          </div>
+        </details>
+        <details class="tab-group">
+          <summary>Bộ lọc nâng cao (tăng win rate)</summary>
+          <div class="tab-group-body">
+            <div class="tab-row">
+              <label class="tab-field" style="flex-direction:row;align-items:center;gap:8px;padding-top:18px">
+                <input type="checkbox" id="entryTrendEnabled" />
+                <span>Lọc xu hướng: chỉ BUY trên EMA, chỉ SELL dưới EMA</span>
+              </label>
+              <label class="tab-field"><span>Khung TG xu hướng</span>
+                <select id="entryTrendTf">
+                  <option value="M30">M30</option>
+                  <option value="H1">H1</option>
+                  <option value="H4" selected>H4</option>
+                  <option value="D1">D1</option>
+                </select>
+              </label>
+              <label class="tab-field"><span>Chu kỳ EMA</span><input id="entryTrendEma" type="number" step="10" min="10" value="200" /></label>
+            </div>
+            <div class="tab-row">
+              <label class="tab-field"><span>Khung giờ giao dịch (HH:MM-HH:MM)</span>
+                <input id="entryTradeHours" type="text" placeholder="vd 07:00-22:00 · trống = 24/7" />
+              </label>
+            </div>
+            <p class="tab-hint">Lọc xu hướng khung lớn là cách tăng win rate kinh điển: tín hiệu ngược trend bị bỏ qua. Khung giờ giúp tránh phiên thanh khoản kém (rollover, đầu phiên Á).</p>
           </div>
         </details>
         <details class="tab-group" id="entryGroupIndicators" style="display:none" open>
@@ -929,11 +967,36 @@
             <div class="tab-row">
               <label class="tab-field"><span>Max lệnh mở (tài khoản)</span><input id="entryMaxPositions" type="number" step="1" /></label>
               <label class="tab-field"><span>Max lần vào / ngày</span><input id="entryMaxPerDay" type="number" step="1" /></label>
+              <label class="tab-field"><span>Spread tối đa (points)</span><input id="entryMaxSpread" type="number" step="1" min="0" placeholder="không giới hạn" /></label>
               <label class="tab-field" style="flex-direction:row;align-items:center;gap:8px;padding-top:18px">
                 <input type="checkbox" id="entryOnlyIfFlat" />
                 <span>Chỉ vào khi chưa có lệnh symbol</span>
               </label>
             </div>
+          </div>
+        </details>
+        <details class="tab-group">
+          <summary>Backtest (đo win rate trước khi bật)</summary>
+          <div class="tab-group-body">
+            <div class="tab-row">
+              <label class="tab-field"><span>Số nến lịch sử</span><input id="btBars" type="number" step="500" min="200" max="5000" value="1500" /></label>
+              <label class="tab-field"><span>Symbol (trống = symbol đầu)</span><input id="btSymbol" type="text" placeholder="tự động" /></label>
+            </div>
+            <div class="tab-actions">
+              <button onclick="withButtonLoading(this, runEntryBacktest)">Chạy backtest với cấu hình đang nhập</button>
+            </div>
+            <div id="btResult" style="display:none">
+              <div class="stat-grid" style="margin-top:10px">
+                <div class="stat-tile"><span class="stat-label">Số lệnh</span><span class="stat-value" id="btTrades">—</span></div>
+                <div class="stat-tile"><span class="stat-label">Win rate</span><span class="stat-value" id="btWinRate">—</span></div>
+                <div class="stat-tile"><span class="stat-label">Profit factor</span><span class="stat-value" id="btPf">—</span></div>
+                <div class="stat-tile"><span class="stat-label">Tổng (points)</span><span class="stat-value" id="btTotal">—</span></div>
+                <div class="stat-tile"><span class="stat-label">TB lãi / lệnh thắng</span><span class="stat-value" id="btAvgWin">—</span></div>
+                <div class="stat-tile"><span class="stat-label">TB lỗ / lệnh thua</span><span class="stat-value" id="btAvgLoss">—</span></div>
+              </div>
+              <p class="tab-hint" id="btMeta"></p>
+            </div>
+            <p class="tab-hint">Backtest chạy đúng logic chỉ báo/ML/bộ lọc đang nhập ở trên (chưa cần Lưu), tính cả spread từng nến, vào lệnh tại giá mở nến kế tiếp. Chỉ hỗ trợ chế độ Chỉ báo / ML / Chỉ báo + ML. Kết quả tính bằng points, chưa gồm swap/phí.</p>
           </div>
         </details>
         <div class="tab-actions">
@@ -1449,6 +1512,7 @@ function switchControlTab(tab) {
   document.querySelectorAll('.control-tab-panel').forEach(panel => {
     panel.classList.toggle('active', panel.dataset.tab === tab);
   });
+  if (tab === 'entry') pollEntryStatus();
 }
 
 async function api(path, method, body) {
@@ -2615,7 +2679,55 @@ function applyEntryIndicators(inds) {
   }
 }
 
+function renderEntryLive(status) {
+  const wrap = document.getElementById('entryLiveWrap');
+  const body = document.getElementById('entryLiveBody');
+  if (!wrap || !body) return;
+  const per = status.per_symbol || {};
+  const syms = Object.keys(per);
+  if (!status.enabled || !syms.length) {
+    wrap.style.display = 'none';
+    return;
+  }
+  wrap.style.display = 'block';
+  body.innerHTML = syms.map(sym => {
+    const s = per[sym];
+    const sigs = s.indicator_signals || {};
+    const sigParts = Object.entries(sigs)
+      .filter(([, v]) => v)
+      .map(([k, v]) => `<span class="${v === 'BUY' ? 'buy' : 'sell'}">${k}${v === 'BUY' ? '↑' : '↓'}</span>`);
+    const blockers = s.blockers || [];
+    let state;
+    if (!status.connected) state = '<span class="sell">EA offline</span>';
+    else if (blockers.length) state = blockers.join(' · ');
+    else state = '<span class="buy">sẵn sàng — chờ tín hiệu</span>';
+    const px = (s.last_bid != null && s.last_ask != null)
+      ? `${s.last_bid} / ${s.last_ask}` : '—';
+    return `<tr>
+      <td data-label="Symbol"><b>${sym}</b></td>
+      <td data-label="Bid / Ask">${px}</td>
+      <td data-label="Spread">${s.spread_points != null ? s.spread_points : '—'}</td>
+      <td data-label="Tín hiệu">${sigParts.length ? sigParts.join(' ') : '—'}</td>
+      <td data-label="ML p(up)">${s.ml_proba != null ? s.ml_proba.toFixed(2) : '—'}</td>
+      <td data-label="Lệnh mở">${s.open ?? 0}</td>
+      <td data-label="Trạng thái">${state}</td>
+    </tr>`;
+  }).join('');
+}
+
+let entryStatusTimer = null;
+async function pollEntryStatus() {
+  if (!currentAccountId) return;
+  const panel = document.querySelector('.control-tab-panel[data-tab="entry"]');
+  if (!panel || !panel.classList.contains('active') || document.hidden) return;
+  try {
+    const status = await api(`/api/${currentAccountId}/entry/status`);
+    renderEntryStatus(status);
+  } catch (e) { /* poll im lặng - lỗi tạm thời không cần toast */ }
+}
+
 function renderEntryStatus(status) {
+  renderEntryLive(status);
   const el = document.getElementById('entryStatusLine');
   if (!el || !status) return;
   const on = status.enabled ? 'BẬT' : 'TẮT';
@@ -2651,7 +2763,14 @@ function collectEntryConfig() {
     cooldown_seconds: parseFloat(document.getElementById('entryCooldown').value) || 60,
     max_open_positions: riskInt('entryMaxPositions'),
     max_entries_per_day: riskInt('entryMaxPerDay'),
+    max_spread_points: riskNum('entryMaxSpread'),
     only_if_flat: document.getElementById('entryOnlyIfFlat').checked,
+    trend_filter: {
+      enabled: document.getElementById('entryTrendEnabled').checked,
+      timeframe: document.getElementById('entryTrendTf').value,
+      ema_period: parseInt(document.getElementById('entryTrendEma').value) || 200,
+    },
+    trade_hours: document.getElementById('entryTradeHours').value.trim() || null,
     trigger_mode: document.getElementById('entryTriggerMode').value,
     schedule_time: document.getElementById('entryScheduleTime').value.trim() || null,
     price_trigger: riskNum('entryPriceTrigger'),
@@ -2692,7 +2811,13 @@ function applyEntryConfig(cfg, enabledFlag) {
   setRiskField('entryCooldown', cfg.cooldown_seconds ?? 60);
   setRiskField('entryMaxPositions', cfg.max_open_positions, true);
   setRiskField('entryMaxPerDay', cfg.max_entries_per_day, true);
+  setRiskField('entryMaxSpread', cfg.max_spread_points);
   document.getElementById('entryOnlyIfFlat').checked = !!cfg.only_if_flat;
+  const tf = cfg.trend_filter || {};
+  document.getElementById('entryTrendEnabled').checked = !!tf.enabled;
+  document.getElementById('entryTrendTf').value = tf.timeframe || 'H4';
+  setRiskField('entryTrendEma', tf.ema_period ?? 200);
+  document.getElementById('entryTradeHours').value = cfg.trade_hours || '';
   document.getElementById('entryTriggerMode').value = cfg.trigger_mode || 'schedule';
   document.getElementById('entryScheduleTime').value = cfg.schedule_time || '';
   setRiskField('entryPriceTrigger', cfg.price_trigger);
@@ -2739,6 +2864,37 @@ async function saveEntryConfig() {
     const data = await api(`/api/${currentAccountId}/entry`, 'POST', body);
     renderEntryStatus(data.status);
     toast('Đã lưu cấu hình EntryManager');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function runEntryBacktest() {
+  if (!currentAccountId) return;
+  try {
+    const body = {
+      config: collectEntryConfig(),
+      symbol: document.getElementById('btSymbol').value.trim() || null,
+      bars_count: parseInt(document.getElementById('btBars').value) || 1500,
+    };
+    const r = await api(`/api/${currentAccountId}/entry/backtest`, 'POST', body);
+    document.getElementById('btResult').style.display = 'block';
+    document.getElementById('btTrades').textContent = r.trades;
+    const wrEl = document.getElementById('btWinRate');
+    wrEl.textContent = r.win_rate + '%';
+    wrEl.className = 'stat-value ' + (r.win_rate >= 50 ? 'profit-pos' : 'profit-neg');
+    document.getElementById('btPf').textContent = r.profit_factor ?? '—';
+    const totEl = document.getElementById('btTotal');
+    totEl.textContent = r.total_points;
+    totEl.className = 'stat-value ' + (r.total_points >= 0 ? 'profit-pos' : 'profit-neg');
+    document.getElementById('btAvgWin').textContent = r.avg_win_points;
+    document.getElementById('btAvgLoss').textContent = r.avg_loss_points;
+    const from = new Date(r.from * 1000).toLocaleDateString();
+    const to = new Date(r.to * 1000).toLocaleDateString();
+    let meta = `${r.symbol} ${r.timeframe} · ${r.bars_tested} nến (${from} → ${to}) · ${r.signals} tín hiệu`;
+    if (r.blocked_by_trend) meta += ` · ${r.blocked_by_trend} bị lọc trend`;
+    if (r.blocked_by_hours) meta += ` · ${r.blocked_by_hours} ngoài giờ`;
+    meta += ` · giữ TB ${r.avg_bars_held} nến/lệnh`;
+    document.getElementById('btMeta').textContent = meta;
+    toast(`Backtest xong: ${r.trades} lệnh, win rate ${r.win_rate}%`);
   } catch (e) { toast(e.message, true); }
 }
 
@@ -2984,6 +3140,7 @@ async function loadInsights() {
 }
 
 setInterval(() => { if (currentAccountId) loadInsights(); }, 15000);
+setInterval(pollEntryStatus, 5000);
 </script>
 </body>
 </html>

@@ -20,6 +20,7 @@ input int    InpPositionsIntervalMs = 1000;  // how often to push a full positio
 input long   InpMagicNumber         = 123456; // magic number tagged on every order this EA opens
 input bool   InpStreamWatchSymbols  = true;  // stream prices for ALL Market Watch symbols (trade any ticker from one chart)
 input int    InpPricesIntervalMs    = 500;   // how often to push Market Watch prices
+input int    InpDeviationPoints     = 10;    // max slippage (points) accepted on market orders
 
 CSocket  g_socket;
 CTrade   g_trade;
@@ -243,6 +244,52 @@ void HandleMessage(CJson &msg)
 }
 
 //+------------------------------------------------------------------+
+//| Round the requested lot size to the broker's min/step/max so a    |
+//| config typo (e.g. 0.015 on a 0.01-step symbol) isn't rejected.    |
+//+------------------------------------------------------------------+
+double NormalizeVolume(const string symbol, double volume)
+{
+   double vmin  = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+   double vmax  = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+   double vstep = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+   if(vstep > 0)
+      volume = MathRound(volume / vstep) * vstep;
+   if(vmin > 0 && volume < vmin)
+      volume = vmin;
+   if(vmax > 0 && volume > vmax)
+      volume = vmax;
+   return NormalizeDouble(volume, 8);
+}
+
+//+------------------------------------------------------------------+
+//| Clamp SL/TP to the broker's minimum stop distance                 |
+//| (SYMBOL_TRADE_STOPS_LEVEL) and round to symbol digits, so a       |
+//| too-tight distance is pushed out instead of the order rejected    |
+//| with "invalid stops" over and over.                               |
+//+------------------------------------------------------------------+
+void ClampStops(const string symbol, const string side, double &sl, double &tp)
+{
+   int    digits   = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+   double point    = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   double min_dist = (double)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL) * point;
+   double bid      = SymbolInfoDouble(symbol, SYMBOL_BID);
+   double ask      = SymbolInfoDouble(symbol, SYMBOL_ASK);
+
+   if(side == "BUY")
+   {
+      if(sl > 0 && bid - sl < min_dist) sl = bid - min_dist;
+      if(tp > 0 && tp - bid < min_dist) tp = bid + min_dist;
+   }
+   else
+   {
+      if(sl > 0 && sl - ask < min_dist) sl = ask + min_dist;
+      if(tp > 0 && ask - tp < min_dist) tp = ask - min_dist;
+   }
+   if(sl > 0) sl = NormalizeDouble(sl, digits);
+   if(tp > 0) tp = NormalizeDouble(tp, digits);
+}
+
+//+------------------------------------------------------------------+
 //| Shared market-order execution, used by both the automatic        |
 //| "signal" path and the manual/web "open_order" path                |
 //+------------------------------------------------------------------+
@@ -254,11 +301,20 @@ bool ExecuteMarketOrder(const string side, const string symbol, const double vol
    // lets us trade any ticker even though the EA sits on one chart.
    SymbolSelect(symbol, true);
 
+   // Brokers differ on filling mode (FOK/IOC/...) - set it per symbol like
+   // the close path already does, or some brokers reject every open.
+   g_trade.SetTypeFillingBySymbol(symbol);
+   g_trade.SetDeviationInPoints(InpDeviationPoints);
+
+   double use_volume = NormalizeVolume(symbol, volume);
+   double use_sl = sl, use_tp = tp;
+   ClampStops(symbol, side, use_sl, use_tp);
+
    bool ok;
    if(side == "BUY")
-      ok = g_trade.Buy(volume, symbol, 0.0, sl, tp, comment);
+      ok = g_trade.Buy(use_volume, symbol, 0.0, use_sl, use_tp, comment);
    else if(side == "SELL")
-      ok = g_trade.Sell(volume, symbol, 0.0, sl, tp, comment);
+      ok = g_trade.Sell(use_volume, symbol, 0.0, use_sl, use_tp, comment);
    else
    {
       Print("SocketBridgeEA: unknown side: ", side);
@@ -318,6 +374,25 @@ void HandleOpenOrder(CJson &msg)
    double sl      = msg.GetDouble("sl", 0.0);
    double tp      = msg.GetDouble("tp", 0.0);
    string comment = msg.GetString("comment", "");
+
+   // Preferred: SL/TP as point distances. Recomputed here from the
+   // terminal's CURRENT price - fresher than the tick Python calculated
+   // its absolute prices from (those stay as fallback for old servers).
+   double sl_points = msg.GetDouble("sl_points", 0.0);
+   double tp_points = msg.GetDouble("tp_points", 0.0);
+   if(sl_points > 0 || tp_points > 0)
+   {
+      SymbolSelect(symbol, true);
+      double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+      double base = (side == "BUY") ? SymbolInfoDouble(symbol, SYMBOL_ASK)
+                                    : SymbolInfoDouble(symbol, SYMBOL_BID);
+      if(point > 0 && base > 0)
+      {
+         double sign = (side == "BUY") ? 1.0 : -1.0;
+         if(sl_points > 0) sl = base - sign * sl_points * point;
+         if(tp_points > 0) tp = base + sign * tp_points * point;
+      }
+   }
 
    ulong ticket = 0;
    bool ok = ExecuteMarketOrder(side, symbol, volume, sl, tp, ticket, comment);

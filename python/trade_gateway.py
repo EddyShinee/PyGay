@@ -73,11 +73,21 @@ class TradeGateway:
             self._pending.pop(req_id, None)
 
     async def open_order(self, symbol: str, side: str, volume: float,
-                          sl: float = 0.0, tp: float = 0.0, comment: str = "") -> dict:
-        return await self._send({
+                          sl: float = 0.0, tp: float = 0.0, comment: str = "",
+                          sl_points: float = 0.0, tp_points: float = 0.0) -> dict:
+        """sl/tp are absolute prices (fallback for older EAs). sl_points /
+        tp_points are distances the EA prefers when present - it recomputes
+        the stops from its own price at send time, which is fresher than the
+        tick this side calculated from."""
+        message = {
             "type": "open_order", "symbol": symbol, "side": side,
             "volume": volume, "sl": sl, "tp": tp, "comment": comment,
-        })
+        }
+        if sl_points > 0:
+            message["sl_points"] = sl_points
+        if tp_points > 0:
+            message["tp_points"] = tp_points
+        return await self._send(message)
 
     async def close_position(self, ticket: int) -> dict:
         return await self._send({"type": "close_position", "ticket": ticket})

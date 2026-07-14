@@ -262,6 +262,51 @@ void HandleMessage(CJson &msg)
    Print("SocketBridgeEA: unknown message type: ", type);
 }
 
+//+------------------------------------------------------------------+
+//| Round the requested lot size to the broker's min/step/max so a    |
+//| config typo isn't rejected outright.                              |
+//+------------------------------------------------------------------+
+double NormalizeVolume(const string symbol, double volume)
+{
+   double vmin  = MarketInfo(symbol, MODE_MINLOT);
+   double vmax  = MarketInfo(symbol, MODE_MAXLOT);
+   double vstep = MarketInfo(symbol, MODE_LOTSTEP);
+   if(vstep > 0)
+      volume = MathRound(volume / vstep) * vstep;
+   if(vmin > 0 && volume < vmin)
+      volume = vmin;
+   if(vmax > 0 && volume > vmax)
+      volume = vmax;
+   return NormalizeDouble(volume, 8);
+}
+
+//+------------------------------------------------------------------+
+//| Clamp SL/TP to the broker's minimum stop distance (MODE_STOPLEVEL)|
+//| and round to symbol digits, so a too-tight distance is pushed out |
+//| instead of the order failing with error 130 (invalid stops).      |
+//+------------------------------------------------------------------+
+void ClampStops(const string symbol, const string side, double &sl, double &tp)
+{
+   int    digits   = (int)MarketInfo(symbol, MODE_DIGITS);
+   double point    = MarketInfo(symbol, MODE_POINT);
+   double min_dist = MarketInfo(symbol, MODE_STOPLEVEL) * point;
+   double bid      = MarketInfo(symbol, MODE_BID);
+   double ask      = MarketInfo(symbol, MODE_ASK);
+
+   if(side == "BUY")
+   {
+      if(sl > 0 && bid - sl < min_dist) sl = bid - min_dist;
+      if(tp > 0 && tp - bid < min_dist) tp = bid + min_dist;
+   }
+   else
+   {
+      if(sl > 0 && sl - ask < min_dist) sl = ask + min_dist;
+      if(tp > 0 && ask - tp < min_dist) tp = ask - min_dist;
+   }
+   if(sl > 0) sl = NormalizeDouble(sl, digits);
+   if(tp > 0) tp = NormalizeDouble(tp, digits);
+}
+
 bool ExecuteMarketOrder(const string side, const string symbol, const double volume,
                          const double sl, const double tp, int &out_ticket,
                          const string comment = "")
@@ -278,10 +323,13 @@ bool ExecuteMarketOrder(const string side, const string symbol, const double vol
    }
 
    string order_comment = (comment == "") ? "SocketBridgeEA" : comment;
+   double use_volume = NormalizeVolume(symbol, volume);
+   double use_sl = sl, use_tp = tp;
+   ClampStops(symbol, side, use_sl, use_tp);
    double price = (type == OP_BUY)
                   ? MarketInfo(symbol, MODE_ASK)
                   : MarketInfo(symbol, MODE_BID);
-   out_ticket = OrderSend(symbol, type, volume, price, g_slippage, sl, tp,
+   out_ticket = OrderSend(symbol, type, use_volume, price, g_slippage, use_sl, use_tp,
                           order_comment, g_magic, 0, clrNONE);
    return (out_ticket > 0);
 }
@@ -330,6 +378,25 @@ void HandleOpenOrder(CJson &msg)
    double sl      = msg.GetDouble("sl", 0.0);
    double tp      = msg.GetDouble("tp", 0.0);
    string comment = msg.GetString("comment", "");
+
+   // Preferred: SL/TP as point distances, recomputed from the terminal's
+   // current price (fresher than the tick Python calculated from).
+   double sl_points = msg.GetDouble("sl_points", 0.0);
+   double tp_points = msg.GetDouble("tp_points", 0.0);
+   if(sl_points > 0 || tp_points > 0)
+   {
+      SymbolSelect(symbol, true);
+      RefreshRates();
+      double point = MarketInfo(symbol, MODE_POINT);
+      double base = (side == "BUY") ? MarketInfo(symbol, MODE_ASK)
+                                    : MarketInfo(symbol, MODE_BID);
+      if(point > 0 && base > 0)
+      {
+         double sign = (side == "BUY") ? 1.0 : -1.0;
+         if(sl_points > 0) sl = base - sign * sl_points * point;
+         if(tp_points > 0) tp = base + sign * tp_points * point;
+      }
+   }
 
    int ticket = 0;
    bool ok = ExecuteMarketOrder(side, symbol, volume, sl, tp, ticket, comment);

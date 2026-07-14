@@ -25,6 +25,7 @@ import account_links
 import account_risk
 import account_entry
 import account_manage
+import backtest as backtest_mod
 import ml_entry
 import auth
 import history
@@ -142,6 +143,10 @@ class EntryConfigRequest(BaseModel):
     max_open_positions: Optional[int] = None
     max_entries_per_day: Optional[int] = None
     only_if_flat: bool = False
+    max_spread_points: Optional[float] = None
+    # {"enabled": bool, "timeframe": "H4", "ema_period": 200}
+    trend_filter: dict[str, Any] = {}
+    trade_hours: Optional[str] = None  # "HH:MM-HH:MM" local, None = 24/7
     trigger_mode: Literal[
         "schedule", "price_above", "price_below", "interval",
         "indicators", "ml", "indicators_ml"
@@ -154,6 +159,12 @@ class EntryConfigRequest(BaseModel):
     indicator_min_agree: int = 2
     indicators: dict[str, Any] = {}
     ml: dict[str, Any] = {}
+
+
+class BacktestRequest(BaseModel):
+    config: dict[str, Any] = {}
+    symbol: Optional[str] = None  # default: first symbol of the config
+    bars_count: int = 1500
 
 
 class MLTrainRequest(BaseModel):
@@ -862,6 +873,65 @@ def create_app(sessions: SessionManager) -> FastAPI:
         if session is not None:
             await session.position_manager.reload_config()
         return {"ok": True, "removed": removed}
+
+    @protected.get("/api/{account_id}/entry/status")
+    async def entry_status(account_id: str, request: Request):
+        """Live EntryManager status only - no Supabase round-trip, safe to
+        poll every few seconds from the UI."""
+        require_account_access(request, account_id)
+        session = sessions.get(account_id)
+        if session is None:
+            return {"enabled": False, "connected": False, "per_symbol": {}}
+        status = session.entry_manager.status()
+        status["connected"] = session.connected
+        return status
+
+    @protected.post("/api/{account_id}/entry/backtest")
+    async def backtest_entry(account_id: str, req: BacktestRequest, request: Request):
+        """Replay the given entry config over history fetched from the EA
+        and report win rate / trades / profit factor."""
+        session = get_session(account_id, request)
+        require_connected(session)
+        config = req.config or {}
+
+        symbols = config.get("symbols") or ([config.get("symbol")] if config.get("symbol") else [])
+        symbol = (req.symbol or (symbols[0] if symbols else "XAUUSD")).strip().upper()
+
+        mode = (config.get("trigger_mode") or "").lower()
+        if mode == "ml":
+            tf = (config.get("ml") or {}).get("timeframe") or "H1"
+        else:
+            tf = config.get("indicator_timeframe") or "H1"
+
+        count = max(200, min(int(req.bars_count or 1500), backtest_mod.MAX_BARS))
+        try:
+            bars = await session.history_gateway.fetch(symbol, tf, count)
+        except (RuntimeError, asyncio.TimeoutError) as exc:
+            raise HTTPException(400, f"Không lấy được dữ liệu lịch sử: {exc}")
+
+        trend_bars = None
+        tf_cfg = config.get("trend_filter") or {}
+        if tf_cfg.get("enabled"):
+            trend_tf = tf_cfg.get("timeframe") or "H4"
+            try:
+                trend_bars = await session.history_gateway.fetch(symbol, trend_tf, 500)
+            except (RuntimeError, asyncio.TimeoutError):
+                trend_bars = None  # filter fails open, same as live
+
+        price = session.price_cache.get(symbol)
+        point = float(price.get("point") or 0) if price else 0.0
+        if point <= 0:
+            raise HTTPException(400, f"Chưa có giá tick cho {symbol} — chờ EA stream giá rồi thử lại.")
+
+        try:
+            result = await asyncio.to_thread(
+                backtest_mod.run_backtest, bars, config, point, trend_bars
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        result["symbol"] = symbol
+        result["timeframe"] = tf
+        return result
 
     @protected.post("/api/{account_id}/entry/ml/train")
     async def train_entry_ml(account_id: str, req: MLTrainRequest, request: Request):
