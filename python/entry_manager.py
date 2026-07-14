@@ -162,6 +162,9 @@ class _SymState:
     streak_count: int = 0
     streak_bar_ts: Optional[int] = None
     last_votes: tuple = (0, 0)  # (buys, sells) of the last computation
+    # Monotonic Entry comment sequence for this symbol (survives restarts via
+    # reseeding from open tickets; never reused when a ticket is closed).
+    entry_seq: int = 0
 
 
 class EntryManager:
@@ -194,8 +197,20 @@ class EntryManager:
         st = self._sym.get(symbol)
         if st is None:
             st = _SymState()
+            # Seed from open tickets so numbering continues after restart and
+            # across legacy `Entry-#n` / new `SYMBOL-Entry-#n` formats.
+            st.entry_seq = self._session.store.max_algo_index(symbol, "Entry", side="")
             self._sym[symbol] = st
         return st
+
+    def _next_entry_index(self, symbol: str) -> int:
+        """Next Entry # for this symbol — always increases, never reuses."""
+        st = self._state(symbol)
+        st.entry_seq = max(
+            st.entry_seq,
+            self._session.store.max_algo_index(symbol, "Entry", side=""),
+        ) + 1
+        return st.entry_seq
 
     async def request_watch(self, symbol: str) -> None:
         """Ask the EA to add a symbol to Market Watch so it starts streaming
@@ -668,7 +683,7 @@ class EntryManager:
             if self._entries_day != today:
                 self._entries_day = today
                 self._entries_today = 0
-            idx = self._session.store.next_algo_index(symbol, side, "Entry")
+            idx = self._next_entry_index(symbol)
             comment = format_order_comment(symbol, "Entry", idx)
 
             result = await self._session.gateway.open_order(

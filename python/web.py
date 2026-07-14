@@ -31,6 +31,7 @@ import auth
 import history
 import telegram_notify
 import db
+from position_close import close_matching, refresh_snapshot
 
 logger = logging.getLogger("web")
 
@@ -68,6 +69,7 @@ class ModifyRequest(BaseModel):
 class CloseAllRequest(BaseModel):
     filter: Literal["all", "profit", "loss"] = "all"
     symbol: str = ""  # optional: close only this symbol's positions
+    side: str = ""    # optional: "BUY" | "SELL"
 
 
 class CloseByThresholdRequest(BaseModel):
@@ -548,86 +550,54 @@ def create_app(sessions: SessionManager) -> FastAPI:
         session = get_session(account_id, request)
         require_connected(session)
 
-        positions = session.store.snapshot()
-        sym_filter = (req.symbol or "").strip().upper()
-        to_close: list[dict] = []
-        for p in positions:
-            if sym_filter and (p.get("symbol") or "").upper() != sym_filter:
-                continue
-            pnl = float(p.get("profit") or 0) + float(p.get("swap") or 0)
-            if req.filter == "profit" and pnl <= 0:
-                continue
-            if req.filter == "loss" and pnl >= 0:
-                continue
-            to_close.append(p)
-
-        if not to_close:
-            return {
-                "ok": True,
-                "closed_count": 0,
-                "failed": [],
-                "filter": req.filter,
-                "symbol": sym_filter or None,
-                "matched": 0,
-            }
-
-        closed = 0
-        failed: list[dict] = []
-        for p in to_close:
-            ticket = int(p["ticket"])
-            result = await session.gateway.close_position(ticket)
-            if result.get("ok"):
-                closed += 1
-            else:
-                failed.append({
-                    "ticket": ticket,
-                    "symbol": p.get("symbol"),
-                    "error": result.get("error") or "close failed",
-                })
-
-        # Force a fresh snapshot so the UI drops closed tickets promptly.
-        try:
-            await session.gateway.request_positions()
-        except Exception:
-            pass
-
-        if closed == 0 and failed:
-            raise HTTPException(400, failed[0]["error"])
-
-        return {
-            "ok": len(failed) == 0,
-            "closed_count": closed,
-            "failed": failed,
-            "filter": req.filter,
-            "symbol": sym_filter or None,
-            "matched": len(to_close),
-            "error": failed[0]["error"] if failed else "",
-        }
+        result = await close_matching(
+            session,
+            filter=req.filter,
+            symbol=(req.symbol or "").strip().upper(),
+            side=(req.side or "").strip().upper(),
+        )
+        if result.get("matched", 0) > 0 and result.get("closed_count", 0) == 0 and result.get("failed"):
+            raise HTTPException(400, result["failed"][0]["error"])
+        return result
 
     @protected.post("/api/{account_id}/positions/close_by_threshold")
     async def close_by_threshold(account_id: str, req: CloseByThresholdRequest, request: Request):
         session = get_session(account_id, request)
-        # Evaluate the threshold PER SYMBOL: each symbol's own net floating P/L is
-        # compared to the threshold, and only symbols that meet it are closed.
-        # This avoids one big winner masking losers (or vice versa) in the total.
-        per_symbol = session.store.totals_by_symbol()
+        await refresh_snapshot(session)
+        # Evaluate the threshold PER SYMBOL + SIDE on a fresh snapshot.
+        per_basket = session.store.totals_by_basket()
         total = session.store.total_profit()
-        triggered_symbols = [
-            {"symbol": sym, "profit": round(pnl, 2)}
-            for sym, pnl in per_symbol.items()
+        triggered = [
+            {"symbol": sym, "side": side, "profit": round(pnl, 2)}
+            for (sym, side), pnl in per_basket.items()
             if (pnl >= req.amount if req.op == ">=" else pnl <= req.amount)
         ]
-        if not triggered_symbols:
+        per_basket_out = [
+            {"symbol": sym, "side": side, "profit": round(pnl, 2)}
+            for (sym, side), pnl in sorted(per_basket.items(), key=lambda x: (x[0][0], x[0][1]))
+        ]
+        if not triggered:
             return {
                 "triggered": False,
                 "total_profit": round(total, 2),
-                "per_symbol": [{"symbol": s, "profit": round(p, 2)} for s, p in per_symbol.items()],
+                "per_basket": per_basket_out,
             }
         require_connected(session)
         results = []
-        for item in triggered_symbols:
-            res = await session.gateway.close_all("all", item["symbol"])
-            results.append({"symbol": item["symbol"], "profit": item["profit"], "ok": bool(res.get("ok")), "error": res.get("error")})
+        for item in triggered:
+            res = await close_matching(
+                session,
+                filter="all",
+                symbol=item["symbol"],
+                side=item["side"],
+                refresh=False,
+            )
+            results.append({
+                **item,
+                "ok": bool(res.get("ok")),
+                "closed_count": res.get("closed_count", 0),
+                "error": res.get("error") or "",
+            })
         return {
             "triggered": True,
             "total_profit": round(total, 2),

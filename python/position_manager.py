@@ -7,7 +7,8 @@ and runs a set of independent, opt-in strategies over each basket:
   - dca    : Martingale averaging - add same-side when losing, scale lot up
   - grid   : add same-side every N points of adverse move (regardless of P/L)
   - pyramid: add same-side when in profit (ride the trend)
-  - hedge  : open the opposite side once when drawdown is deep enough
+  - hedge  : open the opposite side when the primary basket drawdown is deep enough
+             (hedge tickets themselves never trigger another hedge)
 
 Only positions whose magic matches the account's managed magic are touched, so
 manual trades (magic 0 / other EAs) are left alone. Config lives in Supabase
@@ -129,6 +130,16 @@ class _BasketState:
 
 def _pnl(p: dict) -> float:
     return float(p.get("profit", 0.0)) + float(p.get("swap", 0.0))
+
+
+def _is_hedge_position(p: dict) -> bool:
+    """True if this ticket was opened by the hedge strategy."""
+    return "-Hedge-#" in (p.get("comment") or "")
+
+
+def _primary_positions(positions: list[dict]) -> list[dict]:
+    """Non-hedge tickets — the 'seed' basket hedge/DCA/grid/pyramid act on."""
+    return [p for p in positions if not _is_hedge_position(p)]
 
 
 class PositionManager:
@@ -262,15 +273,29 @@ class PositionManager:
             st = self._baskets.get(key)
             if st is None:
                 st = _BasketState(seeded=True, ref_price=m["last_price"])
+                # After restart, don't re-fire hedges that already exist on the
+                # opposite side for this basket.
+                opp = "SELL" if side == "BUY" else "BUY"
+                st.hedge_count = sum(
+                    1 for p in self._managed_positions(symbol)
+                    if p.get("side") == opp and _is_hedge_position(p)
+                )
                 self._baskets[key] = st
 
-            acted = await self._manage_basket(symbol, side, st, m, bid, ask, point)
+            acted = await self._manage_basket(symbol, side, st, positions, bid, ask, point)
             if acted:
                 return  # one action per evaluation cycle keeps things calm
 
-    async def _manage_basket(self, symbol, side, st, m, bid, ask, point) -> bool:
+    async def _manage_basket(self, symbol, side, st, positions, bid, ask, point) -> bool:
         cfg = self.config
         cur = bid if side == "BUY" else ask
+
+        m = self._basket_metrics(positions, side, bid, ask, point)
+        if m is None:
+            return False
+
+        primary = _primary_positions(positions)
+        m_primary = self._basket_metrics(primary, side, bid, ask, point) if primary else None
 
         # 1) Basket close (money or points target) - highest priority.
         if cfg.basket_enabled:
@@ -294,6 +319,12 @@ class PositionManager:
         if m["count"] >= cfg.max_positions_per_basket:
             return False
 
+        # DCA / grid / pyramid / hedge only run on the primary (non-hedge) basket.
+        # Without this, hedge orders on the opposite side form their own "basket"
+        # and trigger a reverse hedge → ping-pong both directions.
+        if m_primary is None:
+            return False
+
         unit = self._unit_factor()
         move = (cur - st.ref_price) if side == "BUY" else (st.ref_price - cur)
         move_points = move / point  # >0 = favorable, <0 = adverse
@@ -301,9 +332,9 @@ class PositionManager:
         # 2) Hedge (open opposite when drawdown deep - may open several).
         if cfg.hedge_enabled and st.hedge_count < max(1, cfg.hedge_max_orders):
             hit = False
-            if cfg.hedge_dd_money is not None and m["pnl_money"] <= -abs(cfg.hedge_dd_money):
+            if cfg.hedge_dd_money is not None and m_primary["pnl_money"] <= -abs(cfg.hedge_dd_money):
                 hit = True
-            if cfg.hedge_dd_points is not None and -m["pnl_points"] >= abs(cfg.hedge_dd_points):
+            if cfg.hedge_dd_points is not None and -m_primary["pnl_points"] >= abs(cfg.hedge_dd_points):
                 hit = True
             if hit:
                 remaining = max(1, cfg.hedge_max_orders) - st.hedge_count
@@ -318,10 +349,11 @@ class PositionManager:
                     remaining = 1  # first rung only; the rest ladder in later
                 if remaining > 0:
                     opp = "SELL" if side == "BUY" else "BUY"
-                    lot = _round_lot(min(cfg.max_lot_per_order, m["total_vol"] * cfg.hedge_lot_ratio))
-                    reason = f"Hedge {opp} {lot} lot ×{remaining} (rổ {side} lỗ {m['pnl_money']:.2f}$)"
+                    lot = _round_lot(min(cfg.max_lot_per_order, m_primary["total_vol"] * cfg.hedge_lot_ratio))
+                    reason = f"Hedge {opp} {lot} lot ×{remaining} (rổ {side} lỗ {m_primary['pnl_money']:.2f}$)"
+                    start_idx = self._session.store.next_algo_index(symbol, opp, "Hedge")
                     opened = await self._add_order(symbol, opp, lot, reason, count=remaining,
-                                                   algo="Hedge", start_index=st.hedge_count + 1)
+                                                   algo="Hedge", start_index=start_idx)
                     if opened > 0:
                         st.hedge_count += opened
                         st.hedge_ref = cur
@@ -330,12 +362,12 @@ class PositionManager:
                         return True
 
         # 3) DCA / Martingale (add same side when losing, on adverse move).
-        if cfg.dca_enabled and st.dca_steps < cfg.dca_max_steps and m["pnl_points"] < 0:
+        if cfg.dca_enabled and st.dca_steps < cfg.dca_max_steps and m_primary["pnl_points"] < 0:
             need = cfg.dca_step_points * unit * point
             if (-move) >= need:
-                lot = _round_lot(scaled_lot(m["last_lot"], cfg.dca_lot_mode, cfg.dca_lot_value))
+                lot = _round_lot(scaled_lot(m_primary["last_lot"], cfg.dca_lot_mode, cfg.dca_lot_value))
                 lot = min(lot, cfg.max_lot_per_order)
-                if m["total_vol"] + lot <= cfg.max_total_lot:
+                if m_primary["total_vol"] + lot <= cfg.max_total_lot:
                     reason = f"DCA #{st.dca_steps + 1} {side} {lot} lot (lỗ, giá đi ngược {-move_points:.0f}pts)"
                     if await self._add_order(symbol, side, lot, reason, algo="DCA", start_index=st.dca_steps + 1):
                         st.dca_steps += 1
@@ -347,9 +379,9 @@ class PositionManager:
         if cfg.grid_enabled and st.grid_levels < cfg.grid_max_levels:
             need = cfg.grid_step_points * unit * point
             if (-move) >= need:
-                lot = _round_lot(scaled_lot(m["last_lot"], cfg.grid_lot_mode, cfg.grid_lot_value))
+                lot = _round_lot(scaled_lot(m_primary["last_lot"], cfg.grid_lot_mode, cfg.grid_lot_value))
                 lot = min(lot, cfg.max_lot_per_order)
-                if m["total_vol"] + lot <= cfg.max_total_lot:
+                if m_primary["total_vol"] + lot <= cfg.max_total_lot:
                     reason = f"Grid #{st.grid_levels + 1} {side} {lot} lot (bước {cfg.grid_step_points})"
                     if await self._add_order(symbol, side, lot, reason, algo="Grid", start_index=st.grid_levels + 1):
                         st.grid_levels += 1
@@ -358,12 +390,12 @@ class PositionManager:
                         return True
 
         # 5) Pyramiding (add same side when in profit, on favorable move).
-        if cfg.pyr_enabled and st.pyr_steps < cfg.pyr_max_steps and m["pnl_points"] > 0:
+        if cfg.pyr_enabled and st.pyr_steps < cfg.pyr_max_steps and m_primary["pnl_points"] > 0:
             need = cfg.pyr_step_points * unit * point
             if move >= need:
-                lot = _round_lot(scaled_lot(m["last_lot"], cfg.pyr_lot_mode, cfg.pyr_lot_value))
+                lot = _round_lot(scaled_lot(m_primary["last_lot"], cfg.pyr_lot_mode, cfg.pyr_lot_value))
                 lot = min(lot, cfg.max_lot_per_order)
-                if m["total_vol"] + lot <= cfg.max_total_lot:
+                if m_primary["total_vol"] + lot <= cfg.max_total_lot:
                     reason = f"Pyramid #{st.pyr_steps + 1} {side} {lot} lot (lời, giá thuận {move_points:.0f}pts)"
                     if await self._add_order(symbol, side, lot, reason, algo="Pyramid", start_index=st.pyr_steps + 1):
                         st.pyr_steps += 1

@@ -389,50 +389,63 @@ class RiskManager:
         return None, None, False
 
     async def _check_symbol_rules(self) -> bool:
-        """Close all positions on a symbol when that symbol's net floating P/L hits TP/SL."""
+        """Close a symbol+side basket when that basket's net floating P/L hits TP/SL."""
         cfg = self.config
         if not (cfg.symbol_tp_usd or cfg.symbol_sl_usd or cfg.symbol_rules):
             return False
 
-        for sym, pnl in self._session.store.totals_by_symbol().items():
+        for (sym, side), pnl in self._session.store.totals_by_basket().items():
             tp, sl, active = self._symbol_limits(sym)
             if not active or (tp is None and sl is None):
                 continue
             reason: Optional[str] = None
             if tp is not None and pnl >= tp:
-                reason = f"{sym} lãi {pnl:.2f} USD (TP {tp})"
+                reason = f"{sym} {side} lãi {pnl:.2f} USD (TP {tp})"
             elif sl is not None and pnl <= -abs(sl):
-                reason = f"{sym} lỗ {pnl:.2f} USD (SL {sl})"
+                reason = f"{sym} {side} lỗ {pnl:.2f} USD (SL {sl})"
             if reason:
-                await self._execute_symbol_close(sym, reason, pnl)
+                await self._execute_basket_close(sym, side, reason, pnl)
                 return True
         return False
 
-    async def _execute_symbol_close(self, symbol: str, reason: str, pnl: float) -> None:
+    async def _execute_basket_close(self, symbol: str, side: str, reason: str, pnl: float) -> None:
+        from position_close import close_matching
+
         self._acting = True
         self._last_action_ts = time.monotonic()
         self._last_trigger = reason
         try:
-            result = await self._session.gateway.close_all("all", symbol)
+            result = await close_matching(
+                self._session,
+                filter="all",
+                symbol=symbol,
+                side=side,
+                refresh=True,
+            )
             if result.get("ok"):
-                logger.info("[%s] risk close symbol %s: %s", self.account_id, symbol, reason)
+                logger.info("[%s] risk close basket %s %s: %s", self.account_id, symbol, side, reason)
                 await telegram_notify.notify(
                     self.account_id,
                     telegram_notify.format_risk_triggered(
-                        self.account_id, reason, f"P/L {symbol}: {pnl:.2f} USD"
+                        self.account_id, reason, f"P/L {symbol} {side}: {pnl:.2f} USD"
                     ),
                 )
             else:
-                logger.warning("[%s] risk close %s failed: %s", self.account_id, symbol, result.get("error"))
+                logger.warning(
+                    "[%s] risk close %s %s failed: %s",
+                    self.account_id, symbol, side, result.get("error"),
+                )
         finally:
             self._acting = False
 
     async def _execute_account_close(self, reason: str, close_filter: str, total: float) -> None:
+        from position_close import close_matching
+
         self._acting = True
         self._last_action_ts = time.monotonic()
         self._last_trigger = reason
         try:
-            result = await self._session.gateway.close_all(close_filter)
+            result = await close_matching(self._session, filter=close_filter, refresh=True)
             if result.get("ok"):
                 logger.info("[%s] risk close_all(%s): %s", self.account_id, close_filter, reason)
                 await telegram_notify.notify(
@@ -450,6 +463,7 @@ class RiskManager:
 
     async def _check_trade_usd_rules(self, positions: list[dict]) -> None:
         cfg = self.config
+        to_close: list[tuple[int, str, float]] = []
         for p in positions:
             ticket = int(p["ticket"])
             pnl = _position_pnl(p)
@@ -466,7 +480,10 @@ class RiskManager:
                     reason = reason or f"Lệnh #{ticket} giữ quá {cfg.max_hold_minutes} phút"
 
             if reason:
-                await self._close_single(ticket, reason, pnl)
+                to_close.append((ticket, reason, pnl))
+
+        for ticket, reason, pnl in to_close:
+            await self._close_single(ticket, reason, pnl)
 
     async def _close_single(self, ticket: int, reason: str, pnl: float) -> None:
         if self._acting:

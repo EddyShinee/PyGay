@@ -324,10 +324,25 @@
     border-radius: var(--radius-sm);
     background: rgba(255,255,255,.02);
   }
+  .sym-summary-card.sym-summary-active {
+    border-color: var(--series-buy);
+    background: rgba(96, 165, 250, .08);
+    box-shadow: 0 0 0 1px rgba(96, 165, 250, .25);
+  }
+  .sym-summary-filter-hit {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1 1 auto;
+    min-width: 0;
+    cursor: pointer;
+  }
+  .sym-summary-filter-hit:hover .sym-summary-name { color: var(--series-buy); }
   .sym-summary-name { font-weight: 600; font-size: 13px; letter-spacing: .02em; }
   .sym-summary-meta { font-size: 11px; color: var(--muted); }
   .sym-summary-pnl { font-weight: 600; font-variant-numeric: tabular-nums; margin-left: auto; }
-  .sym-summary-close { padding: 6px 12px !important; min-height: 0 !important; font-size: 12px !important; flex-shrink: 0; }
+  .sym-summary-actions { display: flex; gap: 4px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+  .sym-summary-btn { padding: 5px 10px !important; min-height: 0 !important; font-size: 11px !important; flex-shrink: 0; }
   #summary { display: flex; gap: 20px; font-size: 13px; color: var(--muted); }
   #summary b { color: var(--text); }
   .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5);
@@ -679,7 +694,8 @@
     .risk-symbol-rule .tab-field { width: 100% !important; flex: 0 0 auto !important; }
     .risk-symbol-rule .rsr-remove { width: 100%; }
     .sym-summary-card { flex: 1 1 100%; }
-    .sym-summary-close { flex: 0 0 auto; }
+    .sym-summary-actions { width: 100%; justify-content: stretch; }
+    .sym-summary-btn { flex: 1 1 auto; }
     .tab-inline { width: 100%; }
     .tab-inline > * { flex: 1 1 auto; }
     .tab-inline > button { flex: 1 1 100%; }
@@ -805,13 +821,13 @@
         <div class="tab-section">
           <div class="tab-section-title">Điều kiện tự động</div>
           <label class="tab-field">
-            <span>Đóng theo từng symbol khi lãi/lỗ của symbol đó</span>
+            <span>Đóng theo từng symbol + BUY/SELL khi lãi/lỗ của rổ đó</span>
             <div class="tab-inline">
               <select id="thresholdOp" style="width:58px"><option value=">=">&ge;</option><option value="<=">&le;</option></select>
               <input id="thresholdAmount" type="number" step="0.01" placeholder="USD" style="width:100px" />
               <button class="secondary needs-connection" onclick="withButtonLoading(this, closeByThreshold)">Kiểm tra &amp; đóng</button>
             </div>
-            <p class="tab-hint" style="margin-top:4px">Xét riêng P/L của từng symbol (không phải tổng). Symbol nào đạt ngưỡng sẽ đóng toàn bộ lệnh của symbol đó.</p>
+            <p class="tab-hint" style="margin-top:4px">Xét riêng P/L của từng rổ (symbol + chiều BUY/SELL). Rổ nào đạt ngưỡng sẽ đóng toàn bộ lệnh của rổ đó.</p>
           </label>
         </div>
       </div>
@@ -1163,7 +1179,7 @@
               <label class="tab-field"><span>Số lệnh hedge tối đa</span><input id="mngHedgeMaxOrders" type="number" step="1" min="1" value="1" /></label>
               <label class="tab-field"><span>Bước thêm hedge (points, 0 = mở hết cùng lúc)</span><input id="mngHedgeStep" type="number" step="1" value="0" /></label>
             </div>
-            <p class="tab-hint">Khi rổ lỗ sâu, mở lệnh ngược chiều để phòng thủ. Đặt "Số lệnh hedge tối đa" &gt; 1 để mở nhiều; bước = 0 sẽ mở hết cùng lúc, bước &gt; 0 sẽ rải thêm mỗi khi lỗ sâu thêm 1 bước.</p>
+            <p class="tab-hint">Khi <b>rổ gốc</b> (Entry/Grid/DCA, không tính lệnh Hedge) lỗ sâu, mở lệnh ngược chiều để phòng thủ. Lệnh Hedge <b>không</b> tự kích hoạt hedge ngược lại — tránh mở cả BUY lẫn SELL liên tục. Bước = 0 mở hết cùng lúc; bước &gt; 0 rải thêm mỗi khi lỗ sâu thêm 1 bước.</p>
           </div>
         </details>
         <div class="tab-actions">
@@ -1328,6 +1344,7 @@
         <input id="symbolFilter" type="text" placeholder="Lọc theo symbol..." style="width:160px" oninput="renderPositions()" />
       </div>
       <div id="symbolSummary" class="symbol-summary" style="display:none"></div>
+      <p id="symbolSummaryHint" class="tab-hint" style="display:none;margin:6px 0 0;font-size:11px">Bấm vào ô symbol để lọc bảng lệnh (bấm lại để bỏ lọc). Lãi/Lỗ: đóng theo P/L realtime từng lệnh trong rổ — không theo số Comment.</p>
       <div style="overflow-x:auto; margin-top:10px">
         <table class="responsive-table">
           <thead>
@@ -1996,40 +2013,74 @@ function renderPositions() {
   renderSymbolSummary();
 }
 
+function applySymbolFilter(symbol) {
+  const input = document.getElementById('symbolFilter');
+  if (!input) return;
+  const next = (symbol || '').trim().toUpperCase();
+  const cur = input.value.trim().toUpperCase();
+  input.value = next && cur === next ? '' : (symbol || '');
+  renderPositions();
+}
+
 function renderSymbolSummary() {
   const box = document.getElementById('symbolSummary');
   if (!box) return;
-  const totals = {};
-  const counts = {};
+  const baskets = {};
   for (const p of lastPositions) {
     const sym = p.symbol || '?';
-    totals[sym] = (totals[sym] || 0) + Number(p.profit || 0) + Number(p.swap || 0);
-    counts[sym] = (counts[sym] || 0) + 1;
+    const side = (p.side || '?').toUpperCase();
+    const key = sym + ':' + side;
+    if (!baskets[key]) baskets[key] = {sym, side, pnl: 0, count: 0};
+    baskets[key].pnl += Number(p.profit || 0) + Number(p.swap || 0);
+    baskets[key].count += 1;
   }
-  const syms = Object.keys(totals).sort();
-  if (!syms.length) {
+  const keys = Object.keys(baskets).sort((a, b) => {
+    const aa = baskets[a], bb = baskets[b];
+    if (aa.sym !== bb.sym) return aa.sym.localeCompare(bb.sym);
+    return aa.side.localeCompare(bb.side);
+  });
+  if (!keys.length) {
     box.innerHTML = '';
     box.style.display = 'none';
+    const hint = document.getElementById('symbolSummaryHint');
+    if (hint) hint.style.display = 'none';
     return;
   }
   box.style.display = 'flex';
+  const hint = document.getElementById('symbolSummaryHint');
+  if (hint) hint.style.display = 'block';
   const dis = currentAccountConnected ? '' : 'disabled';
-  box.innerHTML = syms.map(sym => {
-    const pnl = totals[sym];
-    const cls = pnl >= 0 ? 'profit-pos' : 'profit-neg';
-    const busy = isPending('closeSym:' + sym);
-    return `<div class="sym-summary-card">
-      <div>
-        <div class="sym-summary-name">${escapeHtml(sym)}</div>
-        <div class="sym-summary-meta">${counts[sym]} lệnh</div>
+  const activeSym = (document.getElementById('symbolFilter')?.value || '').trim().toUpperCase();
+  box.innerHTML = keys.map(key => {
+    const b = baskets[key];
+    const cls = b.pnl >= 0 ? 'profit-pos' : 'profit-neg';
+    const sideCls = b.side === 'BUY' ? 'buy' : 'sell';
+    const cardActive = activeSym && b.sym.toUpperCase() === activeSym ? ' sym-summary-active' : '';
+    const btn = (filter, label, danger) => {
+      const busy = isPending(`closeSym:${b.sym}:${b.side}:${filter}`);
+      const btnCls = danger ? 'danger' : 'secondary';
+      return `<button type="button" class="${btnCls} sym-summary-btn needs-connection sym-summary-close"
+        data-symbol="${escapeHtml(b.sym)}" data-side="${escapeHtml(b.side)}" data-filter="${filter}"
+        ${dis} ${busy ? 'disabled' : ''}>${busy ? '...' : label}</button>`;
+    };
+    return `<div class="sym-summary-card${cardActive}" data-symbol="${escapeHtml(b.sym)}">
+      <div class="sym-summary-filter-hit" title="Lọc bảng theo ${escapeHtml(b.sym)}">
+        <div>
+          <div class="sym-summary-name"><span class="${sideCls}">${escapeHtml(b.side)}</span> ${escapeHtml(b.sym)}</div>
+          <div class="sym-summary-meta">${b.count} lệnh</div>
+        </div>
+        <span class="sym-summary-pnl ${cls}">${fmt(b.pnl)}</span>
       </div>
-      <span class="sym-summary-pnl ${cls}">${fmt(pnl)}</span>
-      <button type="button" class="danger sym-summary-close needs-connection" data-symbol="${escapeHtml(sym)}" ${dis} ${busy ? 'disabled' : ''}>${busy ? '...' : 'Đóng'}</button>
+      <div class="sym-summary-actions">
+        ${btn('all', 'Tất cả', true)}
+        ${btn('profit', 'Lãi', false)}
+        ${btn('loss', 'Lỗ', false)}
+      </div>
     </div>`;
   }).join('');
 }
 
-async function closeSymbolClicked(symbol) {
+async function closeSymbolBasketClicked(symbol, side, filter) {
   try {
     if (!currentAccountId) {
       toast('Chưa chọn tài khoản', true);
@@ -2039,27 +2090,28 @@ async function closeSymbolClicked(symbol) {
       toast('EA chưa online — bật SocketBridgeEA trên MetaTrader trước', true);
       return;
     }
-    // No native confirm() — blocked dialogs return false and look like a dead button.
-    await runPending('closeSym:' + symbol, () => closeSymbol(symbol), renderPositions);
+    const pendingKey = `closeSym:${symbol}:${side}:${filter}`;
+    await runPending(pendingKey, () => closeSymbolBasket(symbol, side, filter), renderPositions);
   } catch (e) {
     toast(e.message || String(e), true);
   }
 }
 
-async function closeSymbol(symbol) {
-  toast(`Đang đóng lệnh ${symbol}...`);
+async function closeSymbolBasket(symbol, side, filter) {
+  const filterLabel = filter === 'profit' ? 'lãi' : filter === 'loss' ? 'lỗ' : 'tất cả';
+  toast(`Đang đóng lệnh ${side} ${symbol} (${filterLabel})...`);
   try {
-    const res = await api(`/api/${currentAccountId}/positions/close_all`, 'POST', {filter: 'all', symbol});
+    const res = await api(`/api/${currentAccountId}/positions/close_all`, 'POST', {filter, symbol, side});
     const closed = Number(res.closed_count || 0);
     const failed = Array.isArray(res.failed) ? res.failed : [];
     if (closed > 0 && !failed.length) {
-      toast(`Đã đóng ${closed} lệnh ${symbol}`);
+      toast(`Đã đóng ${closed} lệnh ${side} ${symbol} (${filterLabel})`);
     } else if (closed > 0 && failed.length) {
-      toast(`Đã đóng ${closed}/${res.matched} lệnh ${symbol}`, true);
+      toast(`Đã đóng ${closed}/${res.matched} lệnh ${side} ${symbol}`, true);
     } else if (failed.length) {
       toast(failed[0].error || 'Đóng lệnh thất bại', true);
     } else {
-      toast(`Không có lệnh ${symbol} để đóng`);
+      toast(`Không có lệnh ${side} ${symbol} khớp bộ lọc (${filterLabel})`);
     }
     try { await refreshPositions(); } catch (_) { /* ignore */ }
   } catch (e) {
@@ -2173,11 +2225,24 @@ async function closeAll(filter) {
   if (!box) return;
   box.addEventListener('click', (ev) => {
     const btn = ev.target.closest('.sym-summary-close');
-    if (!btn || btn.disabled) return;
-    const symbol = btn.dataset.symbol;
+    if (btn) {
+      if (btn.disabled) return;
+      const symbol = btn.dataset.symbol;
+      const side = btn.dataset.side;
+      const filter = btn.dataset.filter || 'all';
+      if (!symbol || !side) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      closeSymbolBasketClicked(symbol, side, filter);
+      return;
+    }
+    const hit = ev.target.closest('.sym-summary-filter-hit');
+    if (!hit) return;
+    const card = hit.closest('.sym-summary-card');
+    const symbol = card?.dataset.symbol;
     if (!symbol) return;
     ev.preventDefault();
-    closeSymbolClicked(symbol);
+    applySymbolFilter(symbol);
   });
 })();
 
@@ -2188,10 +2253,10 @@ async function closeByThreshold() {
   try {
     const res = await api(`/api/${currentAccountId}/positions/close_by_threshold`, 'POST', {op, amount});
     if (res.triggered) {
-      const syms = (res.closed || []).map(c => `${c.symbol} (${fmt(c.profit)})`).join(', ');
-      toast(`Đã đóng theo symbol: ${syms || '—'}`);
+      const syms = (res.closed || []).map(c => `${c.side} ${c.symbol} (${fmt(c.profit)})`).join(', ');
+      toast(`Đã đóng theo rổ: ${syms || '—'}`);
     } else {
-      toast(`Chưa symbol nào đạt ngưỡng (tổng ${fmt(res.total_profit)})`);
+      toast(`Chưa rổ nào đạt ngưỡng (tổng ${fmt(res.total_profit)})`);
     }
   } catch (e) { toast(e.message, true); }
 }
