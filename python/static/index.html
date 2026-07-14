@@ -306,8 +306,8 @@
   .risk-symbol-rule .rsr-remove { flex: 0 0 auto; padding: 8px 12px; min-height: 0; font-size: 12px; }
   /* Per-symbol P/L summary above positions table */
   .symbol-summary {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(272px, 1fr));
     gap: 8px;
     margin-top: 12px;
     padding-top: 12px;
@@ -315,9 +315,9 @@
   }
   .sym-summary-card {
     display: flex;
-    align-items: center;
-    gap: 10px;
-    flex: 1 1 200px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
     min-width: 0;
     padding: 10px 12px;
     border: 1px solid var(--border);
@@ -331,18 +331,23 @@
   }
   .sym-summary-filter-hit {
     display: flex;
-    align-items: center;
-    gap: 10px;
-    flex: 1 1 auto;
-    min-width: 0;
+    flex-direction: column;
+    gap: 4px;
     cursor: pointer;
   }
   .sym-summary-filter-hit:hover .sym-summary-name { color: var(--series-buy); }
-  .sym-summary-name { font-weight: 600; font-size: 13px; letter-spacing: .02em; }
+  .sym-summary-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+  }
+  .sym-summary-name { font-weight: 600; font-size: 13px; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sym-summary-meta { font-size: 11px; color: var(--muted); }
-  .sym-summary-pnl { font-weight: 600; font-variant-numeric: tabular-nums; margin-left: auto; }
-  .sym-summary-actions { display: flex; gap: 4px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
-  .sym-summary-btn { padding: 5px 10px !important; min-height: 0 !important; font-size: 11px !important; flex-shrink: 0; }
+  .sym-summary-pnl { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; flex-shrink: 0; }
+  .sym-summary-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+  .sym-summary-btn { padding: 5px 6px !important; min-height: 0 !important; font-size: 11px !important; width: 100%; }
   #summary { display: flex; gap: 20px; font-size: 13px; color: var(--muted); }
   #summary b { color: var(--text); }
   .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5);
@@ -693,9 +698,8 @@
     .risk-symbol-rule { flex-direction: column; align-items: stretch; }
     .risk-symbol-rule .tab-field { width: 100% !important; flex: 0 0 auto !important; }
     .risk-symbol-rule .rsr-remove { width: 100%; }
-    .sym-summary-card { flex: 1 1 100%; }
-    .sym-summary-actions { width: 100%; justify-content: stretch; }
-    .sym-summary-btn { flex: 1 1 auto; }
+    .symbol-summary { grid-template-columns: 1fr; }
+    .sym-summary-actions { grid-template-columns: repeat(3, 1fr); }
     .tab-inline { width: 100%; }
     .tab-inline > * { flex: 1 1 auto; }
     .tab-inline > button { flex: 1 1 100%; }
@@ -2046,7 +2050,7 @@ function renderSymbolSummary() {
     if (hint) hint.style.display = 'none';
     return;
   }
-  box.style.display = 'flex';
+  box.style.display = 'grid';
   const hint = document.getElementById('symbolSummaryHint');
   if (hint) hint.style.display = 'block';
   const dis = currentAccountConnected ? '' : 'disabled';
@@ -2065,11 +2069,11 @@ function renderSymbolSummary() {
     };
     return `<div class="sym-summary-card${cardActive}" data-symbol="${escapeHtml(b.sym)}">
       <div class="sym-summary-filter-hit" title="Lọc bảng theo ${escapeHtml(b.sym)}">
-        <div>
+        <div class="sym-summary-top">
           <div class="sym-summary-name"><span class="${sideCls}">${escapeHtml(b.side)}</span> ${escapeHtml(b.sym)}</div>
-          <div class="sym-summary-meta">${b.count} lệnh</div>
+          <span class="sym-summary-pnl ${cls}">${fmt(b.pnl)}</span>
         </div>
-        <span class="sym-summary-pnl ${cls}">${fmt(b.pnl)}</span>
+        <div class="sym-summary-meta">${b.count} lệnh</div>
       </div>
       <div class="sym-summary-actions">
         ${btn('all', 'Tất cả', true)}
