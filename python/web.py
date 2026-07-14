@@ -67,6 +67,7 @@ class ModifyRequest(BaseModel):
 
 class CloseAllRequest(BaseModel):
     filter: Literal["all", "profit", "loss"] = "all"
+    symbol: str = ""  # optional: close only this symbol's positions
 
 
 class CloseByThresholdRequest(BaseModel):
@@ -548,8 +549,11 @@ def create_app(sessions: SessionManager) -> FastAPI:
         require_connected(session)
 
         positions = session.store.snapshot()
+        sym_filter = (req.symbol or "").strip().upper()
         to_close: list[dict] = []
         for p in positions:
+            if sym_filter and (p.get("symbol") or "").upper() != sym_filter:
+                continue
             pnl = float(p.get("profit") or 0) + float(p.get("swap") or 0)
             if req.filter == "profit" and pnl <= 0:
                 continue
@@ -563,6 +567,7 @@ def create_app(sessions: SessionManager) -> FastAPI:
                 "closed_count": 0,
                 "failed": [],
                 "filter": req.filter,
+                "symbol": sym_filter or None,
                 "matched": 0,
             }
 
@@ -594,6 +599,7 @@ def create_app(sessions: SessionManager) -> FastAPI:
             "closed_count": closed,
             "failed": failed,
             "filter": req.filter,
+            "symbol": sym_filter or None,
             "matched": len(to_close),
             "error": failed[0]["error"] if failed else "",
         }

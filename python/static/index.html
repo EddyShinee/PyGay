@@ -304,6 +304,30 @@
   }
   .risk-symbol-rule .tab-field { flex: 1 1 100px; min-width: 80px; }
   .risk-symbol-rule .rsr-remove { flex: 0 0 auto; padding: 8px 12px; min-height: 0; font-size: 12px; }
+  /* Per-symbol P/L summary above positions table */
+  .symbol-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+  .sym-summary-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1 1 200px;
+    min-width: 0;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: rgba(255,255,255,.02);
+  }
+  .sym-summary-name { font-weight: 600; font-size: 13px; letter-spacing: .02em; }
+  .sym-summary-meta { font-size: 11px; color: var(--muted); }
+  .sym-summary-pnl { font-weight: 600; font-variant-numeric: tabular-nums; margin-left: auto; }
+  .sym-summary-close { padding: 6px 12px !important; min-height: 0 !important; font-size: 12px !important; flex-shrink: 0; }
   #summary { display: flex; gap: 20px; font-size: 13px; color: var(--muted); }
   #summary b { color: var(--text); }
   .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5);
@@ -654,6 +678,8 @@
     .risk-symbol-rule { flex-direction: column; align-items: stretch; }
     .risk-symbol-rule .tab-field { width: 100% !important; flex: 0 0 auto !important; }
     .risk-symbol-rule .rsr-remove { width: 100%; }
+    .sym-summary-card { flex: 1 1 100%; }
+    .sym-summary-close { flex: 0 0 auto; }
     .tab-inline { width: 100%; }
     .tab-inline > * { flex: 1 1 auto; }
     .tab-inline > button { flex: 1 1 100%; }
@@ -1301,6 +1327,7 @@
         <span style="flex:1"></span>
         <input id="ticketFilter" type="text" placeholder="Lọc theo ticket..." style="width:160px" oninput="renderPositions()" />
       </div>
+      <div id="symbolSummary" class="symbol-summary" style="display:none"></div>
       <div style="overflow-x:auto; margin-top:10px">
         <table class="responsive-table">
           <thead>
@@ -1966,6 +1993,73 @@ function renderPositions() {
     </tr>
   `;
   }).join('');
+  renderSymbolSummary();
+}
+
+function renderSymbolSummary() {
+  const box = document.getElementById('symbolSummary');
+  if (!box) return;
+  const totals = {};
+  const counts = {};
+  for (const p of lastPositions) {
+    const sym = p.symbol || '?';
+    totals[sym] = (totals[sym] || 0) + Number(p.profit || 0) + Number(p.swap || 0);
+    counts[sym] = (counts[sym] || 0) + 1;
+  }
+  const syms = Object.keys(totals).sort();
+  if (!syms.length) {
+    box.innerHTML = '';
+    box.style.display = 'none';
+    return;
+  }
+  box.style.display = 'flex';
+  const dis = currentAccountConnected ? '' : 'disabled';
+  box.innerHTML = syms.map(sym => {
+    const pnl = totals[sym];
+    const cls = pnl >= 0 ? 'profit-pos' : 'profit-neg';
+    const busy = isPending('closeSym:' + sym);
+    const symJs = JSON.stringify(sym);
+    return `<div class="sym-summary-card">
+      <div>
+        <div class="sym-summary-name">${escapeHtml(sym)}</div>
+        <div class="sym-summary-meta">${counts[sym]} lệnh</div>
+      </div>
+      <span class="sym-summary-pnl ${cls}">${fmt(pnl)}</span>
+      <button type="button" class="danger sym-summary-close needs-connection" ${dis} ${busy ? 'disabled' : ''}
+        onclick="closeSymbolClicked(this, ${symJs})">${busy ? '...' : 'Đóng'}</button>
+    </div>`;
+  }).join('');
+}
+
+async function closeSymbolClicked(btn, symbol) {
+  if (!currentAccountConnected) {
+    toast('EA chưa kết nối', true);
+    return;
+  }
+  if (!confirm(`Đóng tất cả lệnh ${symbol}?`)) return;
+  await withButtonLoading(btn, () => closeSymbol(symbol));
+}
+
+async function closeSymbol(symbol) {
+  toast(`Đang đóng lệnh ${symbol}...`);
+  try {
+    const res = await api(`/api/${currentAccountId}/positions/close_all`, 'POST', {filter: 'all', symbol});
+    const closed = Number(res.closed_count || 0);
+    const failed = Array.isArray(res.failed) ? res.failed : [];
+    if (closed > 0 && !failed.length) {
+      toast(`Đã đóng ${closed} lệnh ${symbol}`);
+    } else if (closed > 0 && failed.length) {
+      toast(`Đã đóng ${closed}/${res.matched} lệnh ${symbol}`, true);
+    } else if (failed.length) {
+      toast(failed[0].error || 'Đóng lệnh thất bại', true);
+    } else {
+      toast(`Không có lệnh ${symbol} để đóng`);
+    }
+    try { await refreshPositions(); } catch (_) { /* ignore */ }
+  } catch (e) {
+    toast(e.message || String(e), true);
+    throw e;
+  }
 }
 
 async function closePosition(ticket) {
