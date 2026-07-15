@@ -244,6 +244,36 @@ class EntryManager:
         ) + 1
         return st.entry_seq
 
+    @staticmethod
+    def _reset_signal_state(st: "_SymState") -> None:
+        st.streak_side = None
+        st.streak_count = 0
+        st.streak_bar_ts = None
+        st.ml_streak_side = None
+        st.ml_streak_count = 0
+        st.ml_streak_bar_ts = None
+        st.entered_bar_ts = None
+        # Re-arm cooldown/interval from the close moment, not the original
+        # entry - a basket can stay open (DCA/pyramid) far longer than
+        # interval_minutes, so without this the timer is already "elapsed"
+        # the instant it closes and fires again immediately.
+        st.last_entry_ts = time.monotonic()
+
+    def reset_symbol_signal(self, symbol: str) -> None:
+        """Call when a basket/round for this symbol has fully closed (TP/SL).
+        Clears accumulated indicator/ML streaks and bar/timer gates so the
+        next entry needs a genuinely new signal that forms AFTER the close,
+        instead of resuming on state left over from the closed round."""
+        st = self._sym.get(symbol.upper())
+        if st is not None:
+            self._reset_signal_state(st)
+
+    def reset_all_signals(self) -> None:
+        """Same as reset_symbol_signal but for every tracked symbol - used
+        when the whole account just went flat (account-level TP/SL)."""
+        for st in self._sym.values():
+            self._reset_signal_state(st)
+
     async def request_watch(self, symbol: str) -> None:
         """Ask the EA to add a symbol to Market Watch so it starts streaming
         prices. Throttled to at most once every 30s per symbol."""

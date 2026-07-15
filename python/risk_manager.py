@@ -410,6 +410,7 @@ class RiskManager:
 
     async def _execute_basket_close(self, symbol: str, side: str, reason: str, pnl: float) -> None:
         from position_close import close_matching
+        from position_manager import _is_hedge_position
 
         self._acting = True
         self._last_action_ts = time.monotonic()
@@ -422,6 +423,15 @@ class RiskManager:
                 side=side,
                 refresh=True,
             )
+            # Hedge tickets opened against this basket sit on the opposite
+            # side but belong to the same round - close them too, otherwise
+            # they're left open and get picked up as a "fresh" basket on the
+            # next position_manager evaluate(), silently continuing DCA/
+            # pyramid on what's actually the old cycle's leftover.
+            opp = "SELL" if side == "BUY" else "BUY"
+            for p in self._session.store.matching_positions(filter="all", symbol=symbol, side=opp):
+                if _is_hedge_position(p):
+                    await self._session.gateway.close_position(int(p["ticket"]))
             if result.get("ok"):
                 logger.info("[%s] risk close basket %s %s: %s", self.account_id, symbol, side, reason)
                 await telegram_notify.notify(
@@ -430,6 +440,7 @@ class RiskManager:
                         self.account_id, reason, f"P/L {symbol} {side}: {pnl:.2f} USD"
                     ),
                 )
+                self._session.entry_manager.reset_symbol_signal(symbol)
             else:
                 logger.warning(
                     "[%s] risk close %s %s failed: %s",
@@ -456,6 +467,10 @@ class RiskManager:
                 )
                 self._trailing_armed = False
                 self._peak_profit = 0.0
+                if close_filter == "all":
+                    # Every position just closed - the whole account is flat,
+                    # so every symbol's round is over, not just one basket.
+                    self._session.entry_manager.reset_all_signals()
             else:
                 logger.warning("[%s] risk close failed: %s", self.account_id, result.get("error"))
         finally:

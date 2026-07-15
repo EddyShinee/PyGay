@@ -444,7 +444,16 @@ class PositionManager:
         self._acting = True
         self._last_trigger = f"{symbol} {side}: {reason}"
         try:
+            opp = "SELL" if side == "BUY" else "BUY"
             positions = [p for p in self._managed_positions(symbol) if p.get("side") == side]
+            # Hedge tickets opened against this basket sit on the opposite
+            # side but belong to the same round - close them together.
+            # Otherwise they're left dangling and the next evaluate() treats
+            # them as a fresh basket, silently continuing DCA/grid/pyramid on
+            # what's actually the leftover of the old cycle.
+            opp_positions = [p for p in self._managed_positions(symbol) if p.get("side") == opp]
+            hedge_positions = [p for p in opp_positions if _is_hedge_position(p)]
+            positions += hedge_positions
             closed = 0
             for p in positions:
                 res = await self._session.gateway.close_position(int(p["ticket"]))
@@ -453,6 +462,12 @@ class PositionManager:
                 else:
                     logger.warning("[%s] manage close #%s failed: %s", self.account_id, p["ticket"], res.get("error"))
             self._baskets.pop(f"{symbol}:{side}", None)
+            # Only clear the opposite basket's state if we actually flattened
+            # it - an independent (non-hedge) basket on that side must keep
+            # its own dca/grid/pyramid step counters intact.
+            if hedge_positions and len(hedge_positions) == len(opp_positions):
+                self._baskets.pop(f"{symbol}:{opp}", None)
+            self._session.entry_manager.reset_symbol_signal(symbol)
             logger.info("[%s] manage close basket %s %s (%d lệnh): %s", self.account_id, symbol, side, closed, reason)
             await telegram_notify.notify(
                 self.account_id,
