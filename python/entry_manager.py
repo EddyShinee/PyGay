@@ -151,6 +151,11 @@ class _SymState:
     ml_calc_ts: float = 0.0
     ml_cached: Optional[tuple] = None
     last_ml_proba: Optional[float] = None
+    # Consecutive-closed-bar streak of the ML side, mirroring streak_side/
+    # streak_count above but for the "ml.confirm_bars" anti-flicker filter.
+    ml_streak_side: Optional[str] = None
+    ml_streak_count: int = 0
+    ml_streak_bar_ts: Optional[int] = None
     last_trigger: Optional[str] = None
     # Closed-bar time of the last indicator/ML entry: a cross/oversold signal
     # persists for the whole bar, so without this gate the same signal would
@@ -629,7 +634,15 @@ class EntryManager:
             return None
 
         tf = ml_cfg.get("timeframe") or model.get("timeframe") or "H1"
+        combo = (cfg.trigger_mode or "").lower() == "indicators_ml"
+        # In combo mode a separate, usually stricter threshold can be set so
+        # double-confirmation doesn't ride on the same razor-thin edge used
+        # when ML runs standalone - "both signals agree" alone isn't much of
+        # an edge if ML's own bar is barely past 0.58. Default to a stricter
+        # floor (0.62) unless the user explicitly configured combo_threshold.
         threshold = float(ml_cfg.get("threshold", 0.58))
+        if combo:
+            threshold = float(ml_cfg.get("combo_threshold") or max(threshold, 0.62))
         bars = await self._get_bars(symbol, tf)
         # Predict on the last CLOSED bar - the model was trained on completed
         # bars, so feeding it a half-formed candle is a distribution mismatch.
@@ -647,7 +660,28 @@ class EntryManager:
         proba = ml_entry.predict_proba(bars, model, htf_bars)
         st.last_ml_proba = proba
         side = ml_entry.predict_signal(bars, model, threshold, cfg.side, htf_bars)
-        if side is None:
+
+        # Require the ML side to persist this many CONSECUTIVE closed bars -
+        # same anti-flicker idea as the indicator confirm_bars filter, so a
+        # single noisy bar that barely crosses the threshold doesn't count
+        # the same as a well-established move. Combo mode defaults to 2
+        # (unless overridden) since it's the mode most exposed to firing on
+        # every bar where a lagging indicator and a flickering ML both
+        # happen to line up for one instant.
+        need = max(1, int(ml_cfg.get("confirm_bars") or (2 if combo else 1)))
+        if bar_ts != st.ml_streak_bar_ts:
+            if side is not None and side == st.ml_streak_side:
+                st.ml_streak_count += 1
+            elif side is not None:
+                st.ml_streak_side, st.ml_streak_count = side, 1
+            else:
+                st.ml_streak_side, st.ml_streak_count = None, 0
+            st.ml_streak_bar_ts = bar_ts
+        elif side != st.ml_streak_side:
+            st.ml_streak_side = side
+            st.ml_streak_count = 1 if side is not None else 0
+
+        if side is None or st.ml_streak_count < need:
             return None
         reason = f"ML[{model.get('algo', '?')}] p(up)={proba:.2f} ngưỡng {threshold:.2f} — {side}"
         st.ml_cached = (side, reason, bar_ts)
