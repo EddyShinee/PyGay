@@ -1,14 +1,13 @@
 """Machine-learning entry models: logistic, XGBoost, LightGBM.
 
 Predicts whether price goes UP or DOWN over the next `lookahead` bars from
-OHLC (+ tick volume + spread + bar time) features. The trained artefact is a
+OHLC (+ tick volume + bar time) features. The trained artefact is a
 JSON-serialisable dict stored inside the account entry config (Supabase JSONB).
 
 Feature set (see `feature_names()`):
   - lagged returns, RSI, MACD-hist/EMA-gap, Bollinger-z, momentum
   - candle microstructure (range/body/wicks), ATR%, volume z-score
   - Stochastic %K, CCI, Williams %R, ADX/+-DI, candlestick pattern score
-  - spread z-score (liquidity/cost context)
   - hour-of-day / day-of-week (sin/cos) + trading-session flags
   - higher-timeframe EMA(200) distance/direction (optional `htf_bars`)
 
@@ -30,7 +29,7 @@ from typing import Optional
 
 import indicators as ind
 
-MODEL_VERSION = 4
+MODEL_VERSION = 5
 
 ALGORITHMS = ("logistic", "xgboost", "lightgbm")
 
@@ -43,7 +42,7 @@ ML_DEFAULTS = {
     "epochs": 400,       # logistic only
     "lr": 0.1,           # logistic only
     "l2": 0.001,         # logistic only
-    "n_estimators": 200, # tree boosters
+    "n_estimators": 400, # tree boosters (upper ceiling - early stopping trims it)
     "max_depth": 4,
     "learning_rate": 0.05,
     "val_ratio": 0.2,    # chronological hold-out fraction
@@ -84,7 +83,6 @@ def feature_names(lags: int) -> list[str]:
         "hl_range", "body", "upper_wick", "lower_wick",
         "atr_pct", "vol_z",
         "stoch_k", "cci", "williams_r", "adx", "di_diff", "pattern",
-        "spread_z",
         "hour_sin", "hour_cos", "dow_sin", "dow_cos",
         "session_asia", "session_london", "session_ny",
         "htf_dist", "htf_dir",
@@ -98,13 +96,6 @@ def _safe_vol(bar: dict) -> float:
         v = bar.get("volume")
     try:
         return float(v or 0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _safe_spread(bar: dict) -> float:
-    try:
-        return float(bar.get("spread") or 0)
     except (TypeError, ValueError):
         return 0.0
 
@@ -299,7 +290,6 @@ def _feature_row(bars: list[dict], closes: list[float], i: int, lags: int,
     ema_fast = series["ema_fast"]
     ema_slow = series["ema_slow"]
     vols = series["vols"]
-    spreads = series["spreads"]
     stoch = series["stoch"]
     cci = series["cci"]
     williams = series["williams"]
@@ -386,15 +376,6 @@ def _feature_row(bars: list[dict], closes: list[float], i: int, lags: int,
 
     row.append(_pattern_score(bars, i))                                  # pattern
 
-    # Spread z-score over 20 bars (liquidity / trading-cost context)
-    if i >= 19:
-        sw = spreads[i - 19:i + 1]
-        sm = sum(sw) / 20
-        ss = (sum((x - sm) ** 2 for x in sw) / 20) ** 0.5
-        row.append(((spreads[i] - sm) / ss) if ss else 0.0)
-    else:
-        row.append(0.0)
-
     # Time-of-day / day-of-week / session
     row.extend(_time_features(bars[i].get("time")))
 
@@ -416,7 +397,6 @@ def _build_series(bars: list[dict], closes: list[float],
         "ema_fast": ind._ema_series(closes, 12),
         "ema_slow": ind._ema_series(closes, 26),
         "vols": [_safe_vol(b) for b in bars],
-        "spreads": [_safe_spread(b) for b in bars],
         "stoch": _stoch_series(highs, lows, closes, 14),
         "cci": _cci_series(highs, lows, closes, 20),
         "williams": _williams_series(highs, lows, closes, 14),
@@ -556,6 +536,12 @@ def _train_xgboost(X_train, y_train, X_val, y_val, p: dict) -> dict:
     Xv = np.asarray(X_val, dtype=np.float64)
     yv = np.asarray(y_val, dtype=np.int32)
 
+    # Reweight the minority side (up/down bars are rarely 50/50, especially
+    # in a trending window) so the model can't just learn the majority class.
+    n_pos = int(sum(y_train))
+    n_neg = len(y_train) - n_pos
+    scale_pos_weight = (n_neg / n_pos) if n_pos > 0 and n_neg > 0 else 1.0
+
     model = xgb.XGBClassifier(
         n_estimators=int(p["n_estimators"]),
         max_depth=int(p["max_depth"]),
@@ -565,8 +551,10 @@ def _train_xgboost(X_train, y_train, X_val, y_val, p: dict) -> dict:
         min_child_weight=3,
         reg_lambda=1.0,
         reg_alpha=0.05,
+        scale_pos_weight=scale_pos_weight,
         objective="binary:logistic",
         eval_metric="logloss",
+        early_stopping_rounds=30,
         n_jobs=2,
         random_state=42,
         verbosity=0,
@@ -613,6 +601,7 @@ def _train_lightgbm(X_train, y_train, X_val, y_val, p: dict) -> dict:
         reg_lambda=1.0,
         reg_alpha=0.05,
         objective="binary",
+        class_weight="balanced",
         n_jobs=2,
         random_state=42,
         verbosity=-1,

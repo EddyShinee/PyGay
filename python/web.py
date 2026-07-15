@@ -178,13 +178,13 @@ class BacktestRequest(BaseModel):
 class MLTrainRequest(BaseModel):
     symbol: str = "XAUUSD"
     timeframe: str = "H1"
-    count: int = 1000
+    count: int = 3000
     lookahead: int = 3
     lags: int = 5
     threshold: float = 0.58
     epochs: int = 400
     algo: Literal["logistic", "xgboost", "lightgbm"] = "xgboost"
-    n_estimators: int = 200
+    n_estimators: int = 400
     max_depth: int = 4
     learning_rate: float = 0.05
 
