@@ -474,6 +474,34 @@ def _accuracy(preds: list[int], y: list[int]) -> float:
     return round(sum(1 for a, b in zip(preds, y) if a == b) / len(y), 4)
 
 
+def _fit_platt(raw_probs: list[float], y: list[int],
+               epochs: int = 300, lr: float = 0.3) -> tuple[float, float]:
+    """1-D Platt scaling: fit sigmoid(a*raw + b) against true labels on a
+    held-out set. Needed because class-imbalance reweighting
+    (scale_pos_weight / class_weight="balanced") shifts a tree model's raw
+    predicted probabilities away from the true empirical rate - without
+    this, a "confirm if proba >= 0.58" check is comparing against a
+    miscalibrated number. Falls back to a no-op passthrough (a=1, b=0) when
+    there isn't enough held-out data to fit safely."""
+    n = len(raw_probs)
+    if n < 20:
+        return 1.0, 0.0
+    a, b = 1.0, 0.0
+    for _ in range(epochs):
+        ga = gb = 0.0
+        for r, yi in zip(raw_probs, y):
+            err = _sigmoid(a * r + b) - yi
+            ga += err * r
+            gb += err
+        a -= lr * (ga / n)
+        b -= lr * (gb / n)
+    return a, b
+
+
+def _apply_platt(raw: float, a: float, b: float) -> float:
+    return _sigmoid(a * raw + b)
+
+
 def _encode_booster(obj) -> str:
     return base64.b64encode(pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)).decode("ascii")
 
@@ -567,11 +595,21 @@ def _train_xgboost(X_train, y_train, X_val, y_val, p: dict) -> dict:
 
     train_pred = [int(x) for x in _tree_predict(model, Xt)]
     val_pred = [int(x) for x in _tree_predict(model, Xv)]
+
+    # scale_pos_weight above fixes the *training objective* for imbalance
+    # but leaves predict_proba's raw output shifted away from the true
+    # empirical rate - recalibrate it on the held-out validation set so a
+    # "confirm if proba >= threshold" check means what it says.
+    val_raw = [float(x) for x in _tree_predict_proba(model, Xv)[:, 1]]
+    platt_a, platt_b = _fit_platt(val_raw, y_val)
+
     return {
         "algo": "xgboost",
         "booster_b64": _encode_booster(model),
         "means": [],
         "stds": [],
+        "platt_a": platt_a,
+        "platt_b": platt_b,
         "train_accuracy": _accuracy(train_pred, y_train),
         "val_accuracy": _accuracy(val_pred, y_val),
     }
@@ -618,11 +656,19 @@ def _train_lightgbm(X_train, y_train, X_val, y_val, p: dict) -> dict:
 
     train_pred = [int(x) for x in _tree_predict(model, Xt)]
     val_pred = [int(x) for x in _tree_predict(model, Xv)]
+
+    # Same recalibration as xgboost - class_weight="balanced" above also
+    # shifts raw predict_proba away from the true empirical rate.
+    val_raw = [float(x) for x in _tree_predict_proba(model, Xv)[:, 1]]
+    platt_a, platt_b = _fit_platt(val_raw, y_val)
+
     return {
         "algo": "lightgbm",
         "booster_b64": _encode_booster(model),
         "means": [],
         "stds": [],
+        "platt_a": platt_a,
+        "platt_b": platt_b,
         "train_accuracy": _accuracy(train_pred, y_train),
         "val_accuracy": _accuracy(val_pred, y_val),
     }
@@ -702,6 +748,8 @@ def train(bars: list[dict], params: Optional[dict] = None,
         "booster_b64": fitted.get("booster_b64"),
         "means": fitted.get("means") or [],
         "stds": fitted.get("stds") or [],
+        "platt_a": fitted.get("platt_a"),
+        "platt_b": fitted.get("platt_b"),
         "lags": lags,
         "lookahead": lookahead,
         "feature_names": feature_names(lags),
@@ -761,8 +809,11 @@ def predict_proba(bars: list[dict], model: dict,
     try:
         booster = _decode_booster(b64)
         import numpy as np
-        proba = _tree_predict_proba(booster, np.asarray([row], dtype=np.float64))[0]
-        return float(proba[1])
+        raw = float(_tree_predict_proba(booster, np.asarray([row], dtype=np.float64))[0][1])
+        platt_a, platt_b = model.get("platt_a"), model.get("platt_b")
+        if platt_a is not None and platt_b is not None:
+            return _apply_platt(raw, float(platt_a), float(platt_b))
+        return raw
     except Exception:
         return None
 
