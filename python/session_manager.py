@@ -45,6 +45,13 @@ class AccountSession:
         self.has_synced_once = False   # skip diffing "new/modified order" on the very first snapshot
         self.last_drawdown_tier = 0    # 0/50/60/70/100, edge-triggered so we don't spam every second
 
+        # Background evaluate() tasks, one per key. risk/position evaluate() can
+        # trigger a close whose refresh_snapshot() waits for the next
+        # positions_end - a message the socket client worker delivers - so they
+        # MUST run off that worker or they deadlock it and freeze the live
+        # snapshot. handlers.py spawns them here instead of awaiting inline.
+        self._eval_tasks: dict = {}
+
     def summary(self) -> dict:
         """Compact info for the accounts overview page."""
         account = self.account_store.snapshot()

@@ -5,6 +5,7 @@ Every handler routes to the right AccountSession via client.account_id
 message type from MT5 by adding another `@server.on("...")` function in
 `register()`; look up its session the same way the others do.
 """
+import asyncio
 import logging
 import time
 from typing import Optional
@@ -30,6 +31,33 @@ def _drawdown_tier(pct: float) -> int:
         if pct >= tier:
             return tier
     return 0
+
+
+def _log_eval_exc(task: "asyncio.Task") -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("background evaluate failed", exc_info=exc)
+
+
+def _spawn_eval(session, key: str, make_coro) -> None:
+    """Run an evaluator OFF the socket client worker, at most one per key.
+
+    risk/position evaluate() can trigger a close whose refresh_snapshot() waits
+    for the NEXT positions_end - a message THIS client worker delivers. Awaiting
+    them inline (as this code used to) deadlocks the worker against itself: it
+    blocks waiting for a snapshot it is itself responsible for processing, so
+    wait_snapshot times out over and over and the live snapshot freezes (the
+    'dashboard not realtime' bug). As their own task the worker stays free to
+    deliver that snapshot; the manager's _evaluating guard plus the 1s
+    supervisor loop cover overlap and anything skipped while one is in flight."""
+    task = session._eval_tasks.get(key)
+    if task is not None and not task.done():
+        return
+    new_task = asyncio.ensure_future(make_coro())
+    session._eval_tasks[key] = new_task
+    new_task.add_done_callback(_log_eval_exc)
 
 
 def register(server: SocketServer, sessions: SessionManager) -> None:
@@ -71,7 +99,15 @@ def register(server: SocketServer, sessions: SessionManager) -> None:
             if session.entry_manager.enabled:
                 await session.entry_manager.evaluate(symbol, bid, ask, point)
             if session.position_manager.enabled:
-                await session.position_manager.evaluate(symbol, bid, ask, point)
+                # Off the client worker: its basket close -> refresh_snapshot
+                # waits for a positions_end this worker delivers (see
+                # _spawn_eval). entry_manager/grid above don't refresh, so they
+                # stay inline for tick-level responsiveness.
+                _spawn_eval(
+                    session, "manage",
+                    lambda s=symbol, b=bid, a=ask, p=point:
+                        session.position_manager.evaluate(s, b, a, p),
+                )
 
         signal = compute_signal(message)
         if signal is not None:
@@ -117,7 +153,9 @@ def register(server: SocketServer, sessions: SessionManager) -> None:
                         telegram_notify.format_modify_position(ticket, new_p["symbol"], old_p, new_p),
                     )
         session.has_synced_once = True
-        await session.risk_manager.evaluate()
+        # Off the client worker: risk close -> refresh_snapshot waits for the
+        # next positions_end this very worker delivers (see _spawn_eval).
+        _spawn_eval(session, "risk", session.risk_manager.evaluate)
         # Refresh the accounts overview (open_count / floating P&L) - coalesced.
         sessions.request_notify()
 
@@ -145,7 +183,8 @@ def register(server: SocketServer, sessions: SessionManager) -> None:
                 )
             session.last_drawdown_tier = tier
 
-        await session.risk_manager.evaluate()
+        # Off the client worker (see _spawn_eval / on_positions_end).
+        _spawn_eval(session, "risk", session.risk_manager.evaluate)
         # Refresh the accounts overview (balance / equity) - coalesced.
         sessions.request_notify()
 
