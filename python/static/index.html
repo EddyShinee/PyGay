@@ -581,21 +581,25 @@
 
   /* ---------- Mobile ---------- */
 
-  /* Dense tables (positions/insights) become stacked cards instead of a
-     tiny horizontally-scrolled grid - each <td> shows its own label (from
-     data-label, set in JS) with the value beside it. */
+  /* Positions: one compact row per order on small screens */
+  .pos-col-mobile-only { display: none; }
+  .entry-live-mobile { display: none; }
+
+  /* Other dense tables (insights) become stacked cards */
   @media (max-width: 780px) {
-    table.responsive-table thead { display: none; }
-    table.responsive-table, table.responsive-table tbody,
-    table.responsive-table tr, table.responsive-table td { display: block; width: 100%; }
-    table.responsive-table tr {
+    table.responsive-table:not(.positions-table):not(.entry-live-table) thead { display: none; }
+    table.responsive-table:not(.positions-table):not(.entry-live-table),
+    table.responsive-table:not(.positions-table):not(.entry-live-table) tbody,
+    table.responsive-table:not(.positions-table):not(.entry-live-table) tr,
+    table.responsive-table:not(.positions-table):not(.entry-live-table) td { display: block; width: 100%; }
+    table.responsive-table:not(.positions-table):not(.entry-live-table) tr {
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
       padding: 10px 12px;
       margin-bottom: 10px;
       background: rgba(255,255,255,.02);
     }
-    table.responsive-table td {
+    table.responsive-table:not(.positions-table):not(.entry-live-table) td {
       display: flex;
       justify-content: space-between;
       align-items: center;
@@ -605,8 +609,8 @@
       white-space: normal;
       text-align: right;
     }
-    table.responsive-table td:last-child { border-bottom: none; }
-    table.responsive-table td::before {
+    table.responsive-table:not(.positions-table):not(.entry-live-table) td:last-child { border-bottom: none; }
+    table.responsive-table:not(.positions-table):not(.entry-live-table) td::before {
       content: attr(data-label);
       font-size: 11px;
       font-weight: 500;
@@ -615,20 +619,102 @@
       flex-shrink: 0;
       margin-right: 10px;
     }
-    /* Cells holding buttons (actions) read better as a label on top with
-       full-width controls below, not squeezed to the right. */
-    table.responsive-table td:has(button) {
+    table.responsive-table:not(.positions-table):not(.entry-live-table) td:has(button) {
       flex-direction: column;
       align-items: stretch;
       gap: 6px;
     }
-    table.responsive-table td.row-actions { flex-direction: row; }
+
+    /* Positions list — single line per order */
+    table.positions-table thead { display: none; }
+    table.positions-table tbody { display: block; }
+    table.positions-table tr {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 8px 10px;
+      margin-bottom: 6px;
+      background: rgba(255,255,255,.02);
+    }
+    table.positions-table td {
+      border: none;
+      padding: 0;
+    }
+    table.positions-table td::before { display: none; }
+    table.positions-table .pos-col-extra { display: none !important; }
+    table.positions-table .pos-col-mobile-only {
+      display: block;
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    table.positions-table .pos-col-actions {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+    }
+    table.positions-table .pos-col-actions button {
+      padding: 5px 10px !important;
+      min-height: 32px !important;
+      font-size: 11px !important;
+    }
+    .pos-compact-line {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
+    }
+    .pos-compact-text {
+      flex: 1 1 auto;
+      min-width: 0;
+      font-size: 12px;
+      line-height: 1.35;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .pos-compact-text strong { font-weight: 600; }
+    .pos-compact-sep { color: var(--muted); font-size: 11px; }
+    .pos-compact-cmt { font-size: 10px; }
+    .pos-compact-pnl {
+      flex-shrink: 0;
+      font-weight: 600;
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Entry live status — compact rows */
+    table.entry-live-table thead { display: none; }
+    table.entry-live-table tbody { display: block; }
+    table.entry-live-table tr {
+      display: block;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 8px 10px;
+      margin-bottom: 6px;
+      background: rgba(255,255,255,.02);
+    }
+    table.entry-live-table td { border: none; padding: 0; }
+    table.entry-live-table td::before { display: none; }
+    table.entry-live-table .entry-live-extra { display: none !important; }
+    table.entry-live-table .entry-live-mobile { display: block; }
+    .entry-live-compact { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+    .entry-live-head { font-size: 12px; line-height: 1.35; }
+    .entry-live-sub {
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
   }
 
   @media (max-width: 640px) {
-    .tab-bar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-    .tab-bar::-webkit-scrollbar { display: none; }
-    .tab-btn { flex-shrink: 0; }
+    .tab-bar, .control-tab-bar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    .tab-bar::-webkit-scrollbar, .control-tab-bar::-webkit-scrollbar { display: none; }
+    .tab-btn, .control-tab-btn { flex-shrink: 0; padding: 8px 11px; font-size: 12px; }
     .tab-actions button, .toolbar > button { flex: 1 1 130px; }
   }
 
@@ -695,11 +781,46 @@
     }
     .tab-field > span { white-space: normal; }
     .tab-row > button { width: 100%; }
+    /* Entry / Manage / Risk tabs — full-width fields on mobile */
+    .control-panel .tab-row { flex-direction: column; align-items: stretch; }
+    .control-panel .tab-field { width: 100% !important; min-width: 0 !important; flex: 0 0 auto !important; }
+    .control-panel .tab-field[style*="min-width"] { min-width: 0 !important; }
+    .control-panel .tab-field[style*="flex:1"] { flex: 0 0 auto !important; width: 100% !important; }
+    .control-panel .tab-actions { flex-direction: column; align-items: stretch; }
+    .control-panel .tab-actions > button { width: 100%; flex: 0 0 auto; }
+    .control-panel .tab-group > summary {
+      font-size: 11px;
+      padding: 10px 12px;
+      flex-wrap: wrap;
+      row-gap: 4px;
+    }
+    .control-panel .tab-group > summary .group-badge {
+      margin-left: 0;
+      width: 100%;
+    }
+    .control-panel .tab-group > .tab-group-body { padding: 0 12px 12px; }
+    .control-panel .tab-inline { flex-direction: column; align-items: stretch; }
+    .control-panel .tab-inline > * { width: 100% !important; flex: 0 0 auto !important; }
+    .control-panel .chips-input { width: 100%; }
+    .control-panel .chips-input input { min-width: 0; width: 100% !important; flex: 1 1 auto; }
+    .control-panel .tab-hint { font-size: 11px; line-height: 1.45; }
+    .control-tab-bar {
+      margin-left: -16px;
+      margin-right: -16px;
+      padding-left: 16px;
+      padding-right: 16px;
+    }
     .risk-symbol-rule { flex-direction: column; align-items: stretch; }
     .risk-symbol-rule .tab-field { width: 100% !important; flex: 0 0 auto !important; }
     .risk-symbol-rule .rsr-remove { width: 100%; }
     .symbol-summary { grid-template-columns: 1fr; }
     .sym-summary-actions { grid-template-columns: repeat(3, 1fr); }
+    .sym-summary-btn { min-height: 36px !important; }
+    #summary { flex-direction: column; align-items: stretch; gap: 8px; }
+    #summary > span[style*="flex"] { display: none; }
+    #symbolFilter { width: 100% !important; }
+    .panel { padding: 14px 16px; }
+    .control-panel { padding-top: 12px; }
     .tab-inline { width: 100%; }
     .tab-inline > * { flex: 1 1 auto; }
     .tab-inline > button { flex: 1 1 100%; }
@@ -768,7 +889,7 @@
     </div>
 
     <div class="panel control-panel">
-      <div class="tab-bar">
+      <div class="tab-bar control-tab-bar">
         <button type="button" class="tab-btn control-tab-btn" data-tab="general" onclick="switchControlTab('general')">Chung</button>
         <button type="button" class="tab-btn control-tab-btn active" data-tab="trade" onclick="switchControlTab('trade')">Giao dịch</button>
         <button type="button" class="tab-btn control-tab-btn" data-tab="entry" onclick="switchControlTab('entry')">Vào lệnh</button>
@@ -846,7 +967,7 @@
               <span>Bật vào lệnh tự động cho tài khoản này</span>
             </label>
             <div id="entryLiveWrap" style="display:none;overflow-x:auto;margin-top:10px">
-              <table class="responsive-table" style="width:100%">
+              <table class="responsive-table entry-live-table" style="width:100%">
                 <thead>
                   <tr>
                     <th>Symbol</th><th>Bid / Ask</th><th>Spread</th>
@@ -1350,7 +1471,7 @@
       <div id="symbolSummary" class="symbol-summary" style="display:none"></div>
       <p id="symbolSummaryHint" class="tab-hint" style="display:none;margin:6px 0 0;font-size:11px">Bấm vào ô symbol để lọc bảng lệnh (bấm lại để bỏ lọc). Lãi/Lỗ: đóng theo P/L realtime từng lệnh trong rổ — không theo số Comment.</p>
       <div style="overflow-x:auto; margin-top:10px">
-        <table class="responsive-table">
+        <table class="responsive-table positions-table">
           <thead>
             <tr>
               <th>Ticket</th><th>Symbol</th><th>Volume</th>
@@ -1996,19 +2117,34 @@ function renderPositions() {
   bodyEl.innerHTML = rows.map(p => {
     const closeBusy = isPending('close:' + p.ticket);
     const closeDis = dis || (closeBusy ? 'disabled' : '');
+    const sideCls = p.side === 'BUY' ? 'buy' : 'sell';
+    const pnl = Number(p.profit || 0) + Number(p.swap || 0);
+    const pnlCls = pnl >= 0 ? 'profit-pos' : 'profit-neg';
+    const cmt = p.comment ? escapeHtml(p.comment) : '—';
     return `
     <tr data-ticket="${p.ticket}">
-      <td data-label="Ticket">${p.ticket}</td>
-      <td data-label="Symbol"><span class="${p.side === 'BUY' ? 'buy' : 'sell'}">${p.side}</span> ${p.symbol}</td>
-      <td data-label="Volume">${fmt(p.volume, 2)}</td>
-      <td data-label="Giá vào">${fmt(p.price_open, 5)}</td>
-      <td data-label="Thời gian">${fmtTime(p.time_open)}</td>
-      <td data-label="SL">${fmt(p.sl, 5)}</td>
-      <td data-label="TP">${fmt(p.tp, 5)}</td>
-      <td data-label="Magic">${p.magic ?? 0}</td>
-      <td data-label="Comment">${p.comment ? escapeHtml(p.comment) : '—'}</td>
-      <td data-label="Profit" class="${p.profit >= 0 ? 'profit-pos' : 'profit-neg'}">${fmt(p.profit + p.swap)}</td>
-      <td data-label="Thao tác" class="row-actions">
+      <td class="pos-col-mobile-only" data-label="Lệnh">
+        <div class="pos-compact-line">
+          <span class="pos-compact-text">
+            <span class="${sideCls}">${p.side}</span>
+            <strong>${escapeHtml(p.symbol)}</strong>
+            <span class="pos-compact-sep">${fmt(p.volume, 2)}</span>
+            <span class="pos-compact-sep pos-compact-cmt">${cmt}</span>
+          </span>
+          <span class="pos-compact-pnl ${pnlCls}">${fmt(pnl)}</span>
+        </div>
+      </td>
+      <td class="pos-col-extra" data-label="Ticket">${p.ticket}</td>
+      <td class="pos-col-extra" data-label="Symbol"><span class="${sideCls}">${p.side}</span> ${p.symbol}</td>
+      <td class="pos-col-extra" data-label="Volume">${fmt(p.volume, 2)}</td>
+      <td class="pos-col-extra" data-label="Giá vào">${fmt(p.price_open, 5)}</td>
+      <td class="pos-col-extra" data-label="Thời gian">${fmtTime(p.time_open)}</td>
+      <td class="pos-col-extra" data-label="SL">${fmt(p.sl, 5)}</td>
+      <td class="pos-col-extra" data-label="TP">${fmt(p.tp, 5)}</td>
+      <td class="pos-col-extra" data-label="Magic">${p.magic ?? 0}</td>
+      <td class="pos-col-extra" data-label="Comment">${cmt}</td>
+      <td class="pos-col-extra pos-col-pnl-desktop ${pnlCls}" data-label="Profit">${fmt(pnl)}</td>
+      <td data-label="Thao tác" class="row-actions pos-col-actions">
         <button class="danger" onclick="runPending('close:${p.ticket}', () => closePosition(${p.ticket}), renderPositions)" ${closeDis}>${closeBusy ? '...' : 'Đóng'}</button>
       </td>
     </tr>
@@ -2999,13 +3135,19 @@ function renderEntryLive(status) {
     const verdict = parts.length ? parts.join('<br>') : '—';
 
     return `<tr>
-      <td data-label="Symbol"><b>${sym}</b></td>
-      <td data-label="Bid / Ask">${px}</td>
-      <td data-label="Spread">${s.spread_points != null ? s.spread_points : '—'}</td>
-      <td data-label="Tín hiệu">${sigParts.length ? sigParts.join(' ') : '—'}</td>
-      <td data-label="Kết luận">${verdict}</td>
-      <td data-label="Lệnh mở">${s.open ?? 0}</td>
-      <td data-label="Trạng thái">${state}</td>
+      <td class="entry-live-mobile" data-label="Symbol">
+        <div class="entry-live-compact">
+          <span class="entry-live-head"><b>${sym}</b> · ${s.open ?? 0} lệnh · spread ${s.spread_points != null ? s.spread_points : '—'}</span>
+          <span class="entry-live-sub">${state.replace(/<[^>]+>/g, '')}</span>
+        </div>
+      </td>
+      <td class="entry-live-extra" data-label="Symbol"><b>${sym}</b></td>
+      <td class="entry-live-extra" data-label="Bid / Ask">${px}</td>
+      <td class="entry-live-extra" data-label="Spread">${s.spread_points != null ? s.spread_points : '—'}</td>
+      <td class="entry-live-extra" data-label="Tín hiệu">${sigParts.length ? sigParts.join(' ') : '—'}</td>
+      <td class="entry-live-extra" data-label="Kết luận">${verdict}</td>
+      <td class="entry-live-extra" data-label="Lệnh mở">${s.open ?? 0}</td>
+      <td class="entry-live-extra" data-label="Trạng thái">${state}</td>
     </tr>`;
   }).join('');
 }
