@@ -61,9 +61,15 @@ bool CloseOrderTicket(const int ticket)
       if(attempt > 0)
          Sleep(300);
       if(!OrderSelect(ticket, SELECT_BY_TICKET))
-         return false;  // already closed/invalid - nothing left to retry
+         return false;  // unknown ticket - nothing left to retry
+      // SELECT_BY_TICKET also matches orders already in the history pool, where
+      // OrderType() is still OP_BUY/OP_SELL. Calling OrderClose() on those fails
+      // with 4108 (invalid ticket). Treat an already-closed order as success so
+      // close_all / close-by-symbol don't spam 3 retries per stale ticket.
+      if(OrderCloseTime() != 0)
+         return true;   // already closed - goal achieved
       if(!IsMarketOrderType(OrderType()))
-         return false;  // not an open market order anymore
+         return false;  // pending order, not an open market position
       RefreshRates();
       string symbol = OrderSymbol();
       double price = (OrderType() == OP_BUY)

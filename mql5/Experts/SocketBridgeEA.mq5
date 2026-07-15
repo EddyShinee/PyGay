@@ -306,22 +306,39 @@ bool ExecuteMarketOrder(const string side, const string symbol, const double vol
    g_trade.SetTypeFillingBySymbol(symbol);
    g_trade.SetDeviationInPoints(InpDeviationPoints);
 
-   double use_volume = NormalizeVolume(symbol, volume);
-   double use_sl = sl, use_tp = tp;
-   ClampStops(symbol, side, use_sl, use_tp);
-
-   bool ok;
-   if(side == "BUY")
-      ok = g_trade.Buy(use_volume, symbol, 0.0, use_sl, use_tp, comment);
-   else if(side == "SELL")
-      ok = g_trade.Sell(use_volume, symbol, 0.0, use_sl, use_tp, comment);
-   else
+   out_ticket = 0;
+   if(side != "BUY" && side != "SELL")
    {
       Print("SocketBridgeEA: unknown side: ", side);
       return false;
    }
-   out_ticket = ok ? g_trade.ResultOrder() : 0;
-   return ok;
+
+   double use_volume = NormalizeVolume(symbol, volume);
+
+   // Mirror the MT4 open path: a market order can be rejected by the same
+   // transient conditions as a close (requote, off-quotes, trade-context-busy,
+   // stale price) - re-clamp against a fresh price and retry a few times before
+   // giving up. CTrade runs synchronously (SetAsyncMode default false), so a
+   // failed attempt did NOT open a position - retrying can't double-fill.
+   for(int attempt = 0; attempt < 3; attempt++)
+   {
+      if(attempt > 0)
+         Sleep(300);
+      double use_sl = sl, use_tp = tp;
+      ClampStops(symbol, side, use_sl, use_tp);
+      bool ok = (side == "BUY")
+                ? g_trade.Buy(use_volume, symbol, 0.0, use_sl, use_tp, comment)
+                : g_trade.Sell(use_volume, symbol, 0.0, use_sl, use_tp, comment);
+      if(ok)
+      {
+         out_ticket = g_trade.ResultOrder();
+         return true;
+      }
+      Print("SocketBridgeEA: OrderSend ", side, " ", symbol, " attempt ", attempt + 1,
+            "/3 failed - ", g_trade.ResultRetcode(), " ",
+            g_trade.ResultRetcodeDescription());
+   }
+   return false;
 }
 
 void SendOrderResult(const string id, const bool ok, const ulong ticket, const string error,
@@ -351,7 +368,7 @@ void HandleSignal(CJson &msg)
 
    if(action == "CLOSE")
    {
-      g_trade.PositionClose(symbol);
+      CloseAllForSymbol(symbol);
       return;
    }
 
@@ -401,22 +418,54 @@ void HandleOpenOrder(CJson &msg)
 
 bool CloseTicketReliable(const ulong ticket)
 {
-   if(!PositionSelectByTicket(ticket))
+   // Mirror the MT4 close path: closing several positions back-to-back
+   // (close_all / close-by-symbol) makes transient broker rejections (requote,
+   // off-quotes, trade-context-busy, stale price) far more likely, so re-select
+   // and retry a few times before giving up. A ticket that is no longer open is
+   // treated as success: Python's snapshot is up to ~1s stale, so it can send a
+   // close for a position the terminal already closed (SL/TP/manual) - that must
+   // not surface a hard error or spam retries, exactly the MT4 4108 case.
+   for(int attempt = 0; attempt < 3; attempt++)
    {
-      Print("SocketBridgeEA: PositionSelectByTicket failed for #", ticket);
-      return false;
+      if(attempt > 0)
+         Sleep(300);
+      if(!PositionSelectByTicket(ticket))
+         return true;   // already closed / gone - goal achieved
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      // Brokers differ on filling mode; set from the symbol before each close.
+      g_trade.SetExpertMagicNumber(g_magic);
+      g_trade.SetTypeFillingBySymbol(symbol);
+      if(g_trade.PositionClose(ticket))
+         return true;
+      Print("SocketBridgeEA: PositionClose #", ticket, " attempt ", attempt + 1,
+            "/3 failed - ", g_trade.ResultRetcode(), " ",
+            g_trade.ResultRetcodeDescription());
    }
-   string symbol = PositionGetString(POSITION_SYMBOL);
-   // Brokers differ on filling mode; set from the symbol before each close.
-   g_trade.SetExpertMagicNumber(g_magic);
-   g_trade.SetTypeFillingBySymbol(symbol);
-
-   if(g_trade.PositionClose(ticket))
-      return true;
-
-   Print("SocketBridgeEA: PositionClose(#", ticket, ") failed: ",
-         g_trade.ResultRetcode(), " ", g_trade.ResultRetcodeDescription());
    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Close every open position on a symbol (MT4 parity for a "CLOSE"  |
+//| signal, which can face multiple hedged positions). Collect first,|
+//| then close - closing while iterating PositionsTotal is unsafe.   |
+//+------------------------------------------------------------------+
+void CloseAllForSymbol(const string symbol)
+{
+   ulong tickets[];
+   ArrayResize(tickets, 0);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+      if(PositionGetString(POSITION_SYMBOL) != symbol)
+         continue;
+      int n = ArraySize(tickets);
+      ArrayResize(tickets, n + 1);
+      tickets[n] = ticket;
+   }
+   for(int i = 0; i < ArraySize(tickets); i++)
+      CloseTicketReliable(tickets[i]);
 }
 
 void HandleClosePosition(CJson &msg)
