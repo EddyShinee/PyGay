@@ -158,6 +158,12 @@ class RiskManager:
         self._atr_cache: dict[str, _AtrCacheEntry] = {}
         self._last_action_ts: float = 0.0
         self._acting: bool = False
+        # Re-entrancy gate for evaluate(): it runs from the client worker
+        # (positions_end / account handlers) AND the background risk supervisor
+        # loop, two independent coroutines. `_acting` alone can't guard the
+        # overlap because it is only set later (at the actual close), leaving a
+        # window where both pass the check and fire the same close twice.
+        self._evaluating: bool = False
         self._last_trigger: Optional[str] = None
         self._close_time_fired_date: Optional[str] = None
         self._loaded: bool = False
@@ -206,25 +212,32 @@ class RiskManager:
     async def evaluate(self) -> None:
         if not self.enabled or not self._session.connected:
             return
-        if self._acting:
+        if self._acting or self._evaluating:
             return
         now = time.monotonic()
         if now - self._last_action_ts < self.config.cooldown_seconds:
             return
 
-        positions = self._session.store.snapshot()
-        account = self._session.account_store.snapshot()
-        total = self._session.store.total_profit()
+        # Atomic under asyncio: no await between the guard above and this set,
+        # so a second evaluate() that arrives while this one is awaiting a close
+        # sees the flag and bails instead of double-firing (see __init__).
+        self._evaluating = True
+        try:
+            positions = self._session.store.snapshot()
+            account = self._session.account_store.snapshot()
+            total = self._session.store.total_profit()
 
-        triggered = await self._check_account_rules(positions, account, total)
-        if triggered:
-            return
+            triggered = await self._check_account_rules(positions, account, total)
+            if triggered:
+                return
 
-        if await self._check_symbol_rules():
-            return
+            if await self._check_symbol_rules():
+                return
 
-        await self._check_trade_usd_rules(positions)
-        await self._apply_broker_rules(positions)
+            await self._check_trade_usd_rules(positions)
+            await self._apply_broker_rules(positions)
+        finally:
+            self._evaluating = False
 
     async def _check_account_rules(
         self, positions: list[dict], account: dict, total: float

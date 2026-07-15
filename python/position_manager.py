@@ -155,6 +155,11 @@ class PositionManager:
         self.enabled = False
         self._loaded = False
         self._acting = False
+        # Re-entrancy gate: evaluate() runs from on_tick (client worker) AND the
+        # background manage supervisor loop. `_acting` is set only at the action,
+        # leaving a window where both pass the guard and double-fire a basket
+        # close/hedge/pyramid. Set atomically (no await in between) to close it.
+        self._evaluating = False
         self._last_trigger: Optional[str] = None
         self._baskets: dict[str, _BasketState] = {}
         self._eval_ts: dict[str, float] = {}
@@ -258,7 +263,7 @@ class PositionManager:
         }
 
     async def evaluate(self, symbol: str, bid: float, ask: float, point: float) -> None:
-        if not self.enabled or not self._session.connected or self._acting or point <= 0:
+        if not self.enabled or not self._session.connected or self._acting or self._evaluating or point <= 0:
             return
         symbol = symbol.upper()
         allowed = self.config.symbol_list()
@@ -269,6 +274,15 @@ class PositionManager:
             return
         self._eval_ts[symbol] = now
 
+        # Atomic under asyncio (no await before this set): a concurrent evaluate()
+        # from the other caller bails instead of double-acting on the basket.
+        self._evaluating = True
+        try:
+            await self._evaluate_sides(symbol, bid, ask, point)
+        finally:
+            self._evaluating = False
+
+    async def _evaluate_sides(self, symbol: str, bid: float, ask: float, point: float) -> None:
         for side in ("BUY", "SELL"):
             positions = [p for p in self._managed_positions(symbol) if p.get("side") == side]
             key = f"{symbol}:{side}"

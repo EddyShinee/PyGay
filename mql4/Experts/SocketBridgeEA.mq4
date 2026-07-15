@@ -439,6 +439,12 @@ void HandleOpenOrder(CJson &msg)
    int ticket = 0;
    bool ok = ExecuteMarketOrder(side, symbol, volume, sl, tp, ticket, comment);
    SendOrderResult(id, ok, ticket, ok ? "" : LastOrderError());
+   // Push the new state right away so the dashboard reflects it instantly,
+   // instead of waiting up to InpPositionsIntervalMs for the periodic snapshot
+   // (matters most for Telegram-initiated orders, which don't ask Python to
+   // refresh). OrderSend is synchronous, so the position is already live here.
+   if(ok)
+      SendPositionsSnapshot();
 }
 
 void HandleClosePosition(CJson &msg)
@@ -448,6 +454,7 @@ void HandleClosePosition(CJson &msg)
 
    bool ok = CloseOrderTicket(ticket);
    SendOrderResult(id, ok, ticket, ok ? "" : LastOrderError());
+   SendPositionsSnapshot();  // reflect the close on the dashboard immediately
 }
 
 void HandleCloseAll(CJson &msg)
@@ -501,6 +508,7 @@ void HandleCloseAll(CJson &msg)
          " matched=", ArraySize(tickets),
          " closed=", closed_count);
    SendOrderResult(id, all_ok, 0, last_error, closed_count);
+   SendPositionsSnapshot();  // reflect the closes on the dashboard immediately
 }
 
 void HandleModifyPosition(CJson &msg)

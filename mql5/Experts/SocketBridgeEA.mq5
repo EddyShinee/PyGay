@@ -414,6 +414,12 @@ void HandleOpenOrder(CJson &msg)
    ulong ticket = 0;
    bool ok = ExecuteMarketOrder(side, symbol, volume, sl, tp, ticket, comment);
    SendOrderResult(id, ok, ticket, ok ? "" : g_trade.ResultRetcodeDescription());
+   // Push the new state right away so the dashboard reflects it instantly,
+   // instead of waiting up to InpPositionsIntervalMs for the periodic snapshot
+   // (matters most for Telegram-initiated orders, which don't ask Python to
+   // refresh). CTrade runs synchronously, so the position is already live here.
+   if(ok)
+      SendPositionsSnapshot();
 }
 
 bool CloseTicketReliable(const ulong ticket)
@@ -475,6 +481,7 @@ void HandleClosePosition(CJson &msg)
 
    bool ok = CloseTicketReliable(ticket);
    SendOrderResult(id, ok, ticket, ok ? "" : g_trade.ResultRetcodeDescription());
+   SendPositionsSnapshot();  // reflect the close on the dashboard immediately
 }
 
 void HandleCloseAll(CJson &msg)
@@ -533,6 +540,7 @@ void HandleCloseAll(CJson &msg)
          " closed=", closed_count,
          " ok=", all_ok);
    SendOrderResult(id, all_ok, 0, last_error, closed_count);
+   SendPositionsSnapshot();  // reflect the closes on the dashboard immediately
 }
 
 void HandleModifyPosition(CJson &msg)
