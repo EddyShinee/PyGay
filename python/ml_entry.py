@@ -468,6 +468,21 @@ def _chrono_split(X: list, y: list, val_ratio: float):
     return X[:n_train], y[:n_train], X[n_train:], y[n_train:], True
 
 
+def _split_for_calibration(X_val: list, y_val: list, calib_ratio: float = 0.35):
+    """Carve a chronological tail off the validation set for Platt fitting,
+    separate from the part used for early stopping. Reusing the exact same
+    rows for both would calibrate against the very data that already shaped
+    the model's complexity (how many trees), which flatters the calibration
+    fit without it necessarily holding on genuinely fresh data. Falls back
+    to full reuse when there isn't enough data to split further."""
+    n = len(X_val)
+    n_calib = max(10, int(n * calib_ratio))
+    n_es = n - n_calib
+    if n_es < 10:
+        return X_val, y_val, X_val, y_val
+    return X_val[:n_es], y_val[:n_es], X_val[n_es:], y_val[n_es:]
+
+
 def _accuracy(preds: list[int], y: list[int]) -> float:
     if not y:
         return 0.0
@@ -564,6 +579,13 @@ def _train_xgboost(X_train, y_train, X_val, y_val, p: dict) -> dict:
     Xv = np.asarray(X_val, dtype=np.float64)
     yv = np.asarray(y_val, dtype=np.int32)
 
+    # Early stopping and Platt calibration each need their own held-out
+    # slice - fitting both from the same rows would calibrate against the
+    # exact data that already shaped the model's complexity (tree count).
+    X_es, y_es, X_cal, y_cal = _split_for_calibration(X_val, y_val)
+    Xes = np.asarray(X_es, dtype=np.float64)
+    yes = np.asarray(y_es, dtype=np.int32)
+
     # Reweight the minority side (up/down bars are rarely 50/50, especially
     # in a trending window) so the model can't just learn the majority class.
     n_pos = int(sum(y_train))
@@ -588,9 +610,9 @@ def _train_xgboost(X_train, y_train, X_val, y_val, p: dict) -> dict:
         verbosity=0,
     )
     try:
-        model.fit(Xt, yt, eval_set=[(Xv, yv)], verbose=False)
+        model.fit(Xt, yt, eval_set=[(Xes, yes)], verbose=False)
     except TypeError:
-        model.fit(Xt, yt, eval_set=[(Xv, yv)])
+        model.fit(Xt, yt, eval_set=[(Xes, yes)])
     _strip_feature_names(model)
 
     train_pred = [int(x) for x in _tree_predict(model, Xt)]
@@ -598,10 +620,11 @@ def _train_xgboost(X_train, y_train, X_val, y_val, p: dict) -> dict:
 
     # scale_pos_weight above fixes the *training objective* for imbalance
     # but leaves predict_proba's raw output shifted away from the true
-    # empirical rate - recalibrate it on the held-out validation set so a
+    # empirical rate - recalibrate on the calibration-only slice so a
     # "confirm if proba >= threshold" check means what it says.
-    val_raw = [float(x) for x in _tree_predict_proba(model, Xv)[:, 1]]
-    platt_a, platt_b = _fit_platt(val_raw, y_val)
+    Xcal = np.asarray(X_cal, dtype=np.float64)
+    val_raw = [float(x) for x in _tree_predict_proba(model, Xcal)[:, 1]]
+    platt_a, platt_b = _fit_platt(val_raw, y_cal)
 
     return {
         "algo": "xgboost",
@@ -629,6 +652,12 @@ def _train_lightgbm(X_train, y_train, X_val, y_val, p: dict) -> dict:
     Xv = np.asarray(X_val, dtype=np.float64)
     yv = np.asarray(y_val, dtype=np.int32)
 
+    # Early stopping and Platt calibration each need their own held-out
+    # slice - see the same split in _train_xgboost for why.
+    X_es, y_es, X_cal, y_cal = _split_for_calibration(X_val, y_val)
+    Xes = np.asarray(X_es, dtype=np.float64)
+    yes = np.asarray(y_es, dtype=np.int32)
+
     model = lgb.LGBMClassifier(
         n_estimators=int(p["n_estimators"]),
         max_depth=int(p["max_depth"]),
@@ -647,7 +676,7 @@ def _train_lightgbm(X_train, y_train, X_val, y_val, p: dict) -> dict:
     try:
         model.fit(
             Xt, yt,
-            eval_set=[(Xv, yv)],
+            eval_set=[(Xes, yes)],
             callbacks=[lgb.early_stopping(40, verbose=False), lgb.log_evaluation(0)],
         )
     except Exception:
@@ -659,8 +688,9 @@ def _train_lightgbm(X_train, y_train, X_val, y_val, p: dict) -> dict:
 
     # Same recalibration as xgboost - class_weight="balanced" above also
     # shifts raw predict_proba away from the true empirical rate.
-    val_raw = [float(x) for x in _tree_predict_proba(model, Xv)[:, 1]]
-    platt_a, platt_b = _fit_platt(val_raw, y_val)
+    Xcal = np.asarray(X_cal, dtype=np.float64)
+    val_raw = [float(x) for x in _tree_predict_proba(model, Xcal)[:, 1]]
+    platt_a, platt_b = _fit_platt(val_raw, y_cal)
 
     return {
         "algo": "lightgbm",

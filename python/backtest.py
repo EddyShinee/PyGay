@@ -66,13 +66,17 @@ def _make_ml_predictor(
     except Exception:
         return None
 
+    platt_a, platt_b = model.get("platt_a"), model.get("platt_b")
+
     def predict_tree(bars: list) -> Optional[float]:
         row = ml_entry._latest_features(bars, model, htf_bars)
         if row is None:
             return None
         try:
-            proba = ml_entry._tree_predict_proba(booster, np.asarray([row], dtype=np.float64))[0]
-            return float(proba[1])
+            raw = float(ml_entry._tree_predict_proba(booster, np.asarray([row], dtype=np.float64))[0][1])
+            if platt_a is not None and platt_b is not None:
+                return ml_entry._apply_platt(raw, float(platt_a), float(platt_b))
+            return raw
         except Exception:
             return None
 
