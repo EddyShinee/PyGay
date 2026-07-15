@@ -433,21 +433,25 @@ class RiskManager:
             # snapshot, and a close can fail transiently.
             opp = "SELL" if side == "BUY" else "BUY"
             hedge_failed: list[dict] = []
+            hedge_closed: set[int] = set()
             for round_idx in range(MAX_CLOSE_ROUNDS):
                 if round_idx > 0:
                     await refresh_snapshot(self._session)
                 hedge_positions = [
                     p for p in self._session.store.matching_positions(filter="all", symbol=symbol, side=opp)
-                    if _is_hedge_position(p)
+                    if _is_hedge_position(p) and int(p["ticket"]) not in hedge_closed
                 ]
                 if not hedge_positions:
                     hedge_failed = []
                     break
                 hedge_failed = []
                 for p in hedge_positions:
-                    res = await self._session.gateway.close_position(int(p["ticket"]))
-                    if not res.get("ok"):
-                        hedge_failed.append({"ticket": p["ticket"], "error": res.get("error")})
+                    ticket = int(p["ticket"])
+                    res = await self._session.gateway.close_position(ticket)
+                    if res.get("ok"):
+                        hedge_closed.add(ticket)
+                    else:
+                        hedge_failed.append({"ticket": ticket, "error": res.get("error")})
                 if round_idx < MAX_CLOSE_ROUNDS - 1:
                     await asyncio.sleep(CLOSE_ROUND_DELAY_S)
 

@@ -453,6 +453,11 @@ class PositionManager:
             opp = "SELL" if side == "BUY" else "BUY"
             total_closed = 0
             failed: list[dict] = []
+            # Tickets already confirmed closed - the EA's next snapshot can
+            # lag a moment, so a later round's "still open" read may briefly
+            # repeat one we just closed. Skip it instead of re-sending a
+            # close that would just come back "position doesn't exist".
+            closed_tickets: set[int] = set()
             # Loop a few rounds, re-reading live positions each time: a
             # pyramid/DCA add that was sent moments before this basket hit
             # TP/SL won't be in the snapshot on the first pass, and a close
@@ -472,17 +477,20 @@ class PositionManager:
                     p for p in self._managed_positions(symbol)
                     if p.get("side") == opp and _is_hedge_position(p)
                 ]
+                to_close = [p for p in to_close if int(p["ticket"]) not in closed_tickets]
                 if not to_close:
                     failed = []
                     break
                 failed = []
                 for p in to_close:
-                    res = await self._session.gateway.close_position(int(p["ticket"]))
+                    ticket = int(p["ticket"])
+                    res = await self._session.gateway.close_position(ticket)
                     if res.get("ok"):
                         total_closed += 1
+                        closed_tickets.add(ticket)
                     else:
-                        failed.append({"ticket": p["ticket"], "error": res.get("error")})
-                        logger.warning("[%s] manage close #%s failed: %s", self.account_id, p["ticket"], res.get("error"))
+                        failed.append({"ticket": ticket, "error": res.get("error")})
+                        logger.warning("[%s] manage close #%s failed: %s", self.account_id, ticket, res.get("error"))
                 if round_idx < MAX_CLOSE_ROUNDS - 1:
                     await asyncio.sleep(CLOSE_ROUND_DELAY_S)
 

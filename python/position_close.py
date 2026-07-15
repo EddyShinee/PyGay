@@ -52,11 +52,20 @@ async def close_matching(
     total_closed = 0
     matched_total = 0
     failed: list[dict] = []
+    # Tickets we've already gotten an "ok" close for - the EA's next snapshot
+    # can lag a moment behind the close, so a later round's "still open" read
+    # may briefly repeat one we just closed. Re-sending a close for it would
+    # just get "PositionSelectByTicket failed" (ticket no longer exists) back
+    # from the EA - harmless, but it pollutes `failed` with a false negative.
+    closed_tickets: set[int] = set()
 
     for round_idx in range(MAX_CLOSE_ROUNDS):
         if refresh or round_idx > 0:
             await refresh_snapshot(session)
-        to_close = session.store.matching_positions(filter=filter, symbol=symbol, side=side)
+        to_close = [
+            p for p in session.store.matching_positions(filter=filter, symbol=symbol, side=side)
+            if int(p["ticket"]) not in closed_tickets
+        ]
         if not to_close:
             failed = []
             break
@@ -67,6 +76,7 @@ async def close_matching(
             result = await session.gateway.close_position(ticket)
             if result.get("ok"):
                 total_closed += 1
+                closed_tickets.add(ticket)
             else:
                 failed.append({
                     "ticket": ticket,
