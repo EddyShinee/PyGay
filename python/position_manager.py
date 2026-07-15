@@ -27,6 +27,7 @@ import account_manage
 import telegram_notify
 from grid_jobs import pip_multiplier, scaled_lot, sl_tp_from_points
 from models import format_order_comment
+from position_close import refresh_snapshot
 
 if TYPE_CHECKING:
     from session_manager import AccountSession, SessionManager
@@ -36,6 +37,11 @@ logger = logging.getLogger("position_manager")
 SUPERVISOR_INTERVAL_S = 1.0
 EVAL_THROTTLE_S = 1.0
 MIN_LOT = 0.01
+# See position_close.MAX_CLOSE_ROUNDS - same reasoning applies to basket
+# closes here: retry a few rounds so an in-flight add or a transient close
+# failure doesn't leave a ticket orphaned from the round that just ended.
+MAX_CLOSE_ROUNDS = 3
+CLOSE_ROUND_DELAY_S = 1.0
 
 
 def _round_lot(lot: float) -> float:
@@ -445,35 +451,57 @@ class PositionManager:
         self._last_trigger = f"{symbol} {side}: {reason}"
         try:
             opp = "SELL" if side == "BUY" else "BUY"
-            positions = [p for p in self._managed_positions(symbol) if p.get("side") == side]
-            # Hedge tickets opened against this basket sit on the opposite
-            # side but belong to the same round - close them together.
-            # Otherwise they're left dangling and the next evaluate() treats
-            # them as a fresh basket, silently continuing DCA/grid/pyramid on
-            # what's actually the leftover of the old cycle.
-            opp_positions = [p for p in self._managed_positions(symbol) if p.get("side") == opp]
-            hedge_positions = [p for p in opp_positions if _is_hedge_position(p)]
-            positions += hedge_positions
-            closed = 0
-            for p in positions:
-                res = await self._session.gateway.close_position(int(p["ticket"]))
-                if res.get("ok"):
-                    closed += 1
-                else:
-                    logger.warning("[%s] manage close #%s failed: %s", self.account_id, p["ticket"], res.get("error"))
+            total_closed = 0
+            failed: list[dict] = []
+            # Loop a few rounds, re-reading live positions each time: a
+            # pyramid/DCA add that was sent moments before this basket hit
+            # TP/SL won't be in the snapshot on the first pass, and a close
+            # can fail transiently (EA timeout, broker rejection). Without
+            # retrying, that ticket is silently left open and orphaned - the
+            # next evaluate() would treat it as a brand-new basket instead of
+            # the tail end of the round that just closed.
+            for round_idx in range(MAX_CLOSE_ROUNDS):
+                if round_idx > 0:
+                    await refresh_snapshot(self._session)
+                # Hedge tickets opened against this basket sit on the
+                # opposite side but belong to the same round - close them
+                # together, otherwise they'd be left dangling and picked up
+                # as a fresh basket on the next evaluate().
+                to_close = [p for p in self._managed_positions(symbol) if p.get("side") == side]
+                to_close += [
+                    p for p in self._managed_positions(symbol)
+                    if p.get("side") == opp and _is_hedge_position(p)
+                ]
+                if not to_close:
+                    failed = []
+                    break
+                failed = []
+                for p in to_close:
+                    res = await self._session.gateway.close_position(int(p["ticket"]))
+                    if res.get("ok"):
+                        total_closed += 1
+                    else:
+                        failed.append({"ticket": p["ticket"], "error": res.get("error")})
+                        logger.warning("[%s] manage close #%s failed: %s", self.account_id, p["ticket"], res.get("error"))
+                if round_idx < MAX_CLOSE_ROUNDS - 1:
+                    await asyncio.sleep(CLOSE_ROUND_DELAY_S)
+
+            await refresh_snapshot(self._session)
             self._baskets.pop(f"{symbol}:{side}", None)
-            # Only clear the opposite basket's state if we actually flattened
-            # it - an independent (non-hedge) basket on that side must keep
-            # its own dca/grid/pyramid step counters intact.
-            if hedge_positions and len(hedge_positions) == len(opp_positions):
+            # Only clear the opposite basket's state if that side is now
+            # actually flat - an independent (non-hedge) basket still open
+            # there must keep its own dca/grid/pyramid step counters intact.
+            if not any(p.get("side") == opp for p in self._managed_positions(symbol)):
                 self._baskets.pop(f"{symbol}:{opp}", None)
             self._session.entry_manager.reset_symbol_signal(symbol)
-            logger.info("[%s] manage close basket %s %s (%d lệnh): %s", self.account_id, symbol, side, closed, reason)
+            logger.info("[%s] manage close basket %s %s (%d lệnh): %s", self.account_id, symbol, side, total_closed, reason)
+            note = f"{reason} · {total_closed} lệnh · P/L {pnl:.2f}$"
+            if failed:
+                tickets = ", ".join(str(f["ticket"]) for f in failed)
+                note += f" · CHƯA đóng được {len(failed)} lệnh (#{tickets}) - cần kiểm tra thủ công"
             await telegram_notify.notify(
                 self.account_id,
-                telegram_notify.format_manage_action(
-                    self.account_id, "Đóng rổ", f"{reason} · {closed} lệnh · P/L {pnl:.2f}$"
-                ),
+                telegram_notify.format_manage_action(self.account_id, "Đóng rổ", note),
             )
         finally:
             self._acting = False

@@ -409,7 +409,7 @@ class RiskManager:
         return False
 
     async def _execute_basket_close(self, symbol: str, side: str, reason: str, pnl: float) -> None:
-        from position_close import close_matching
+        from position_close import close_matching, refresh_snapshot, MAX_CLOSE_ROUNDS, CLOSE_ROUND_DELAY_S
         from position_manager import _is_hedge_position
 
         self._acting = True
@@ -427,12 +427,31 @@ class RiskManager:
             # side but belong to the same round - close them too, otherwise
             # they're left open and get picked up as a "fresh" basket on the
             # next position_manager evaluate(), silently continuing DCA/
-            # pyramid on what's actually the old cycle's leftover.
+            # pyramid on what's actually the old cycle's leftover. Loop a
+            # few rounds for the same reason close_matching does: a hedge
+            # add still in flight when this fired won't be in the first
+            # snapshot, and a close can fail transiently.
             opp = "SELL" if side == "BUY" else "BUY"
-            for p in self._session.store.matching_positions(filter="all", symbol=symbol, side=opp):
-                if _is_hedge_position(p):
-                    await self._session.gateway.close_position(int(p["ticket"]))
-            if result.get("ok"):
+            hedge_failed: list[dict] = []
+            for round_idx in range(MAX_CLOSE_ROUNDS):
+                if round_idx > 0:
+                    await refresh_snapshot(self._session)
+                hedge_positions = [
+                    p for p in self._session.store.matching_positions(filter="all", symbol=symbol, side=opp)
+                    if _is_hedge_position(p)
+                ]
+                if not hedge_positions:
+                    hedge_failed = []
+                    break
+                hedge_failed = []
+                for p in hedge_positions:
+                    res = await self._session.gateway.close_position(int(p["ticket"]))
+                    if not res.get("ok"):
+                        hedge_failed.append({"ticket": p["ticket"], "error": res.get("error")})
+                if round_idx < MAX_CLOSE_ROUNDS - 1:
+                    await asyncio.sleep(CLOSE_ROUND_DELAY_S)
+
+            if result.get("ok") and not hedge_failed:
                 logger.info("[%s] risk close basket %s %s: %s", self.account_id, symbol, side, reason)
                 await telegram_notify.notify(
                     self.account_id,
@@ -442,9 +461,18 @@ class RiskManager:
                 )
                 self._session.entry_manager.reset_symbol_signal(symbol)
             else:
+                failed = list(result.get("failed") or []) + hedge_failed
+                err = result.get("error") or (hedge_failed[0]["error"] if hedge_failed else "")
                 logger.warning(
                     "[%s] risk close %s %s failed: %s",
-                    self.account_id, symbol, side, result.get("error"),
+                    self.account_id, symbol, side, err,
+                )
+                await telegram_notify.notify(
+                    self.account_id,
+                    telegram_notify.format_risk_triggered(
+                        self.account_id, reason,
+                        f"CHƯA đóng hết {symbol} {side} - còn {len(failed)} lệnh lỗi, cần kiểm tra thủ công",
+                    ),
                 )
         finally:
             self._acting = False
@@ -473,6 +501,13 @@ class RiskManager:
                     self._session.entry_manager.reset_all_signals()
             else:
                 logger.warning("[%s] risk close failed: %s", self.account_id, result.get("error"))
+                await telegram_notify.notify(
+                    self.account_id,
+                    telegram_notify.format_risk_triggered(
+                        self.account_id, reason,
+                        f"CHƯA đóng hết lệnh (filter={close_filter}) - còn {len(result.get('failed') or [])} lệnh lỗi, cần kiểm tra thủ công",
+                    ),
+                )
         finally:
             self._acting = False
 
