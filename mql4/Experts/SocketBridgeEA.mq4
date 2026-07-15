@@ -51,14 +51,30 @@ int CountOpenMarketOrders()
 
 bool CloseOrderTicket(const int ticket)
 {
-   if(!OrderSelect(ticket, SELECT_BY_TICKET))
-      return false;
-   RefreshRates();
-   string symbol = OrderSymbol();
-   double price = (OrderType() == OP_BUY)
-                  ? MarketInfo(symbol, MODE_BID)
-                  : MarketInfo(symbol, MODE_ASK);
-   return OrderClose(ticket, OrderLots(), price, g_slippage, clrNONE);
+   // Closing several positions back-to-back (close_all / close-by-symbol)
+   // makes transient broker-side rejections (requote, off-quotes, trade
+   // context busy, stale price) far more likely than closing one order in
+   // isolation. Re-select + refresh the price and retry a few times before
+   // giving up, instead of surfacing a raw broker error on the first miss.
+   for(int attempt = 0; attempt < 3; attempt++)
+   {
+      if(attempt > 0)
+         Sleep(300);
+      if(!OrderSelect(ticket, SELECT_BY_TICKET))
+         return false;  // already closed/invalid - nothing left to retry
+      if(!IsMarketOrderType(OrderType()))
+         return false;  // not an open market order anymore
+      RefreshRates();
+      string symbol = OrderSymbol();
+      double price = (OrderType() == OP_BUY)
+                     ? MarketInfo(symbol, MODE_BID)
+                     : MarketInfo(symbol, MODE_ASK);
+      if(OrderClose(ticket, OrderLots(), price, g_slippage, clrNONE))
+         return true;
+      Print("SocketBridgeEA: OrderClose #", ticket, " attempt ", attempt + 1,
+            "/3 failed - ", LastOrderError());
+   }
+   return false;
 }
 
 void CloseAllForSymbol(const string symbol)

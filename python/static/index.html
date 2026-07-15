@@ -1128,6 +1128,11 @@
               </label>
             </div>
             <p class="tab-hint" id="mlThresholdHint"></p>
+            <div class="tab-row">
+              <label class="tab-field"><span>Ngưỡng riêng khi kết hợp chỉ báo (combo)</span><input id="mlComboThreshold" type="number" step="0.01" min="0.5" max="0.95" placeholder="để trống = dùng ngưỡng trên" /></label>
+              <label class="tab-field"><span>Xác nhận liên tiếp (nến)</span><input id="mlConfirmBars" type="number" step="1" min="1" value="1" /></label>
+            </div>
+            <p class="tab-hint">Ở chế độ <b>Chỉ báo + ML</b>, ML chỉ là một trong hai điều kiện AND — nếu ngưỡng ML vẫn để mức tiêu chuẩn (0.58) thì tín hiệu "kép" thực ra không chắc hơn ML một mình bao nhiêu. Đặt <b>ngưỡng combo</b> cao hơn (vd 0.62–0.65) để đòi hỏi ML tự tin hơn khi phối hợp, và <b>xác nhận liên tiếp ≥ 2</b> để loại các lần xác suất chỉ chạm ngưỡng đúng 1 nến rồi tụt lại — tránh vào lệnh theo nhiễu.</p>
             <div class="tab-section-title" style="margin-top:14px">Tham số huấn luyện</div>
             <div class="tab-row">
               <label class="tab-field"><span>Số nến lịch sử</span><input id="mlCount" type="number" step="100" min="200" value="1500" /></label>
@@ -3022,6 +3027,11 @@ const ENTRY_INDICATORS = [
   {key:'momentum', label:'Momentum (ROC%)', group:'Dao động & xu hướng', fields:[['period','Period',10],['threshold','Ngưỡng %',0.1]]},
   {key:'williams', label:'Williams %R', group:'Dao động & xu hướng', fields:[['period','Period',14],['oversold','Quá bán',-80],['overbought','Quá mua',-20]]},
   {key:'adx', label:'ADX (+DI/-DI)', group:'Dao động & xu hướng', fields:[['period','Period',14],['threshold','Ngưỡng ADX',25]]},
+  {key:'stoch_rsi', label:'Stochastic RSI', group:'Nhanh & tức thời', fields:[['rsi_period','RSI period',14],['stoch_period','Stoch period',14],['oversold','Quá bán',20],['overbought','Quá mua',80]]},
+  {key:'hull_cross', label:'Hull MA Cross', group:'Nhanh & tức thời', fields:[['fast','HMA nhanh',9],['slow','HMA chậm',21]]},
+  {key:'supertrend', label:'Supertrend', group:'Nhanh & tức thời', fields:[['period','ATR period',10],['multiplier','Hệ số nhân',3]]},
+  {key:'vortex', label:'Vortex (VI+/VI-)', group:'Nhanh & tức thời', fields:[['period','Period',14]]},
+  {key:'psar', label:'Parabolic SAR', group:'Nhanh & tức thời', fields:[['step','Bước AF',0.02],['max_step','AF tối đa',0.2]]},
   {key:'heikin_ashi', label:'Heikin Ashi', group:'Nến Nhật (Candlestick)', fields:[['trend_bars','Số nến cùng màu',2]]},
   {key:'engulfing', label:'Engulfing (Nến nhấn chìm)', group:'Nến Nhật (Candlestick)', fields:[]},
   {key:'hammer', label:'Hammer / Shooting Star', group:'Nến Nhật (Candlestick)', fields:[['wick_ratio','Tỷ lệ bóng/thân',2]]},
@@ -3228,6 +3238,8 @@ function collectEntryMl() {
     timeframe: document.getElementById('mlTimeframe').value,
     threshold: parseFloat(document.getElementById('mlThreshold').value) || 0.58,
     algo: document.getElementById('mlAlgo')?.value || 'xgboost',
+    combo_threshold: riskNum('mlComboThreshold'),
+    confirm_bars: parseInt(document.getElementById('mlConfirmBars').value) || 1,
   };
   // Preserve the trained model so saving other settings won't wipe it.
   if (entryMlModel) ml.model = entryMlModel;
@@ -3277,6 +3289,8 @@ function applyEntryMl(ml) {
   document.getElementById('mlEnabled').checked = !!ml.enabled;
   document.getElementById('mlTimeframe').value = ml.timeframe || 'H1';
   setRiskField('mlThreshold', ml.threshold ?? 0.58);
+  setRiskField('mlComboThreshold', ml.combo_threshold);
+  setRiskField('mlConfirmBars', ml.confirm_bars ?? 1);
   const algoEl = document.getElementById('mlAlgo');
   if (algoEl) {
     const algo = ml.algo || (ml.model && ml.model.algo) || 'xgboost';

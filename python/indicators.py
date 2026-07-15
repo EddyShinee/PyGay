@@ -23,6 +23,12 @@ INDICATOR_DEFAULTS: dict[str, dict] = {
     "momentum": {"period": 10, "threshold": 0.1},
     "williams": {"period": 14, "oversold": -80, "overbought": -20},
     "adx": {"period": 14, "threshold": 25},
+    # --- Fast / low-lag group ---
+    "stoch_rsi": {"rsi_period": 14, "stoch_period": 14, "oversold": 20, "overbought": 80},
+    "hull_cross": {"fast": 9, "slow": 21},
+    "supertrend": {"period": 10, "multiplier": 3},
+    "vortex": {"period": 14},
+    "psar": {"step": 0.02, "max_step": 0.2},
     # --- Japanese candlestick group ---
     "heikin_ashi": {"trend_bars": 2},
     "engulfing": {},
@@ -83,6 +89,70 @@ def _stddev(vals: list[float]) -> float:
         return 0.0
     m = sum(vals) / n
     return (sum((v - m) ** 2 for v in vals) / n) ** 0.5
+
+
+def _rsi_series(vals: list[float], period: int) -> list[Optional[float]]:
+    """Wilder RSI at every bar (not just the latest) - needed by StochRSI."""
+    n = len(vals)
+    out: list[Optional[float]] = [None] * n
+    if period <= 0 or n < period + 1:
+        return out
+    gains = losses = 0.0
+    for i in range(1, period + 1):
+        d = vals[i] - vals[i - 1]
+        if d >= 0:
+            gains += d
+        else:
+            losses -= d
+    avg_gain = gains / period
+    avg_loss = losses / period
+    out[period] = 100.0 if avg_loss == 0 else 100 - 100 / (1 + avg_gain / avg_loss)
+    for i in range(period + 1, n):
+        d = vals[i] - vals[i - 1]
+        g = d if d > 0 else 0.0
+        l = -d if d < 0 else 0.0
+        avg_gain = (avg_gain * (period - 1) + g) / period
+        avg_loss = (avg_loss * (period - 1) + l) / period
+        out[i] = 100.0 if avg_loss == 0 else 100 - 100 / (1 + avg_gain / avg_loss)
+    return out
+
+
+def _wma_series(vals: list[float], period: int) -> list[Optional[float]]:
+    n = len(vals)
+    out: list[Optional[float]] = [None] * n
+    if period <= 0:
+        return out
+    weight_sum = period * (period + 1) / 2
+    for i in range(period - 1, n):
+        s = 0.0
+        for j in range(period):
+            s += vals[i - j] * (period - j)
+        out[i] = s / weight_sum
+    return out
+
+
+def _hma_series(vals: list[float], period: int) -> list[Optional[float]]:
+    """Hull MA - much lower lag than SMA/EMA of the same period."""
+    n = len(vals)
+    out: list[Optional[float]] = [None] * n
+    if period <= 1 or n == 0:
+        return out
+    half = max(1, period // 2)
+    sqrt_n = max(1, round(period ** 0.5))
+    wma_half = _wma_series(vals, half)
+    wma_full = _wma_series(vals, period)
+    diff: list[Optional[float]] = [None] * n
+    for i in range(n):
+        if wma_half[i] is not None and wma_full[i] is not None:
+            diff[i] = 2 * wma_half[i] - wma_full[i]
+    start = next((i for i, d in enumerate(diff) if d is not None), None)
+    if start is None:
+        return out
+    sub_hma = _wma_series(diff[start:], sqrt_n)
+    for i, v in enumerate(sub_hma):
+        if v is not None:
+            out[start + i] = v
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -323,6 +393,153 @@ def sig_adx(bars: list[dict], p: dict) -> Optional[str]:
 
 
 # --------------------------------------------------------------------------
+# Fast / low-lag indicators
+# --------------------------------------------------------------------------
+
+def sig_stoch_rsi(bars: list[dict], p: dict) -> Optional[str]:
+    """Stochastic applied to RSI itself - reacts much faster than plain RSI."""
+    closes = _closes(bars)
+    rsi_period = int(p.get("rsi_period", 14))
+    stoch_period = int(p.get("stoch_period", 14))
+    oversold = float(p.get("oversold", 20))
+    overbought = float(p.get("overbought", 80))
+    rsi = _rsi_series(closes, rsi_period)
+    valid = [v for v in rsi if v is not None]
+    if len(valid) < stoch_period:
+        return None
+    window = valid[-stoch_period:]
+    hh, ll = max(window), min(window)
+    if hh == ll:
+        return None
+    k = 100 * (valid[-1] - ll) / (hh - ll)
+    if k < oversold:
+        return "BUY"
+    if k > overbought:
+        return "SELL"
+    return None
+
+
+def sig_hull_cross(bars: list[dict], p: dict) -> Optional[str]:
+    """Hull MA crossover - same idea as sma_cross/ema_cross but far less lag."""
+    closes = _closes(bars)
+    fast = int(p.get("fast", 9))
+    slow = int(p.get("slow", 21))
+    if len(closes) < slow + int(slow ** 0.5) + 5:
+        return None
+    return _cross(_hma_series(closes, fast), _hma_series(closes, slow))
+
+
+def sig_supertrend(bars: list[dict], p: dict) -> Optional[str]:
+    """ATR-based trend flip - fires right as the trend turns, no fixed lag."""
+    period = int(p.get("period", 10))
+    mult = float(p.get("multiplier", 3))
+    highs, lows, closes = _highs(bars), _lows(bars), _closes(bars)
+    n = len(closes)
+    if n < period * 2:
+        return None
+    tr = [highs[0] - lows[0]] + [
+        max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
+        for i in range(1, n)
+    ]
+    atr: list[Optional[float]] = [None] * n
+    atr[period] = sum(tr[1:period + 1]) / period
+    for i in range(period + 1, n):
+        atr[i] = (atr[i - 1] * (period - 1) + tr[i]) / period
+
+    final_upper: list[Optional[float]] = [None] * n
+    final_lower: list[Optional[float]] = [None] * n
+    uptrend: list[Optional[bool]] = [None] * n
+    for i in range(period, n):
+        if atr[i] is None:
+            continue
+        mid = (highs[i] + lows[i]) / 2
+        basic_upper = mid + mult * atr[i]
+        basic_lower = mid - mult * atr[i]
+        if final_upper[i - 1] is None:
+            final_upper[i] = basic_upper
+            final_lower[i] = basic_lower
+            uptrend[i] = closes[i] >= mid
+            continue
+        prev_upper, prev_lower = final_upper[i - 1], final_lower[i - 1]
+        final_upper[i] = basic_upper if (basic_upper < prev_upper or closes[i - 1] > prev_upper) else prev_upper
+        final_lower[i] = basic_lower if (basic_lower > prev_lower or closes[i - 1] < prev_lower) else prev_lower
+        if uptrend[i - 1]:
+            uptrend[i] = closes[i] >= final_lower[i]
+        else:
+            uptrend[i] = closes[i] > final_upper[i]
+
+    if uptrend[-1] is None or uptrend[-2] is None:
+        return None
+    if uptrend[-1] and not uptrend[-2]:
+        return "BUY"
+    if not uptrend[-1] and uptrend[-2]:
+        return "SELL"
+    return None
+
+
+def sig_vortex(bars: list[dict], p: dict) -> Optional[str]:
+    """VI+/VI- crossover - flips direction faster than ADX's +DI/-DI."""
+    period = int(p.get("period", 14))
+    highs, lows, closes = _highs(bars), _lows(bars), _closes(bars)
+    n = len(closes)
+    if n < period + 2:
+        return None
+    vm_plus = [0.0] * n
+    vm_minus = [0.0] * n
+    tr = [0.0] * n
+    for i in range(1, n):
+        vm_plus[i] = abs(highs[i] - lows[i - 1])
+        vm_minus[i] = abs(lows[i] - highs[i - 1])
+        tr[i] = max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
+    vi_plus: list[Optional[float]] = [None] * n
+    vi_minus: list[Optional[float]] = [None] * n
+    for i in range(period, n):
+        sum_tr = sum(tr[i - period + 1:i + 1])
+        if sum_tr == 0:
+            continue
+        vi_plus[i] = sum(vm_plus[i - period + 1:i + 1]) / sum_tr
+        vi_minus[i] = sum(vm_minus[i - period + 1:i + 1]) / sum_tr
+    return _cross(vi_plus, vi_minus)
+
+
+def sig_psar(bars: list[dict], p: dict) -> Optional[str]:
+    """Parabolic SAR reversal - flags a trend flip the bar it happens."""
+    step = float(p.get("step", 0.02))
+    max_step = float(p.get("max_step", 0.2))
+    highs, lows, closes = _highs(bars), _lows(bars), _closes(bars)
+    n = len(closes)
+    if n < 5:
+        return None
+    uptrend = closes[1] >= closes[0]
+    af = step
+    ep = highs[0] if uptrend else lows[0]
+    sar = lows[0] if uptrend else highs[0]
+    trend_hist = [uptrend]
+    for i in range(1, n):
+        sar = sar + af * (ep - sar)
+        if uptrend:
+            sar = min(sar, lows[i - 1], lows[i - 2] if i >= 2 else lows[i - 1])
+            if lows[i] < sar:
+                uptrend, sar, ep, af = False, ep, lows[i], step
+            elif highs[i] > ep:
+                ep = highs[i]
+                af = min(af + step, max_step)
+        else:
+            sar = max(sar, highs[i - 1], highs[i - 2] if i >= 2 else highs[i - 1])
+            if highs[i] > sar:
+                uptrend, sar, ep, af = True, ep, highs[i], step
+            elif lows[i] < ep:
+                ep = lows[i]
+                af = min(af + step, max_step)
+        trend_hist.append(uptrend)
+    if trend_hist[-1] and not trend_hist[-2]:
+        return "BUY"
+    if not trend_hist[-1] and trend_hist[-2]:
+        return "SELL"
+    return None
+
+
+# --------------------------------------------------------------------------
 # Japanese candlestick indicators
 # --------------------------------------------------------------------------
 
@@ -455,6 +672,11 @@ _DISPATCH: dict[str, Callable[[list[dict], dict], Optional[str]]] = {
     "momentum": sig_momentum,
     "williams": sig_williams,
     "adx": sig_adx,
+    "stoch_rsi": sig_stoch_rsi,
+    "hull_cross": sig_hull_cross,
+    "supertrend": sig_supertrend,
+    "vortex": sig_vortex,
+    "psar": sig_psar,
     "heikin_ashi": sig_heikin_ashi,
     "engulfing": sig_engulfing,
     "hammer": sig_hammer,

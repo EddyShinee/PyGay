@@ -924,6 +924,28 @@ def create_app(sessions: SessionManager) -> FastAPI:
             bars = await session.history_gateway.fetch(req.symbol, req.timeframe, req.count)
         except (RuntimeError, asyncio.TimeoutError) as exc:
             raise HTTPException(400, f"Không lấy được dữ liệu lịch sử: {exc}")
+
+        # Fetch the existing entry config first: if a trend filter is set up
+        # (higher-timeframe EMA), reuse its timeframe as extra ML context -
+        # same series the live trend filter and backtests already fetch.
+        try:
+            row = await asyncio.to_thread(account_entry.get_entry_config, account_id)
+        except account_entry.EntryConfigError as exc:
+            raise HTTPException(500, str(exc))
+        except account_entry.EntryUnavailable as exc:
+            raise HTTPException(503, str(exc))
+        config = dict(row["config"]) if row else {}
+        enabled = bool(row["enabled"]) if row else False
+
+        htf_bars = None
+        tf_cfg = config.get("trend_filter") or {}
+        if tf_cfg.get("enabled"):
+            htf_tf = tf_cfg.get("timeframe") or "H4"
+            try:
+                htf_bars = await session.history_gateway.fetch(req.symbol, htf_tf, 500)
+            except (RuntimeError, asyncio.TimeoutError):
+                htf_bars = None  # train without htf context rather than fail the whole request
+
         try:
             model = await asyncio.to_thread(
                 ml_entry.train,
@@ -937,20 +959,13 @@ def create_app(sessions: SessionManager) -> FastAPI:
                     "max_depth": req.max_depth,
                     "learning_rate": req.learning_rate,
                 },
+                htf_bars,
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc))
         model["timeframe"] = req.timeframe
 
         # Merge the trained model into the existing entry config's ml block.
-        try:
-            row = await asyncio.to_thread(account_entry.get_entry_config, account_id)
-        except account_entry.EntryConfigError as exc:
-            raise HTTPException(500, str(exc))
-        except account_entry.EntryUnavailable as exc:
-            raise HTTPException(503, str(exc))
-        config = dict(row["config"]) if row else {}
-        enabled = bool(row["enabled"]) if row else False
         ml_block = dict(config.get("ml") or {})
         ml_block.update({
             "enabled": ml_block.get("enabled", True),

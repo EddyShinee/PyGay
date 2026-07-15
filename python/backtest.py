@@ -39,16 +39,20 @@ MAX_BARS = 5000
 DEFAULT_EXIT_BARS = 10
 
 
-def _make_ml_predictor(model: dict) -> Optional[Callable[[list], Optional[float]]]:
+def _make_ml_predictor(
+    model: dict, htf_bars: Optional[list[dict]] = None,
+) -> Optional[Callable[[list], Optional[float]]]:
     """predict_proba equivalent with the booster decoded ONCE - decoding a
-    pickled tree model per bar would dominate the whole backtest."""
+    pickled tree model per bar would dominate the whole backtest.
+    `htf_bars` (optional) are the higher-timeframe bars used for the model's
+    htf-trend feature - same series the live trend filter fetches."""
     if not model:
         return None
     algo = str(model.get("algo") or "logistic").lower()
 
     if algo == "logistic" or (model.get("weights") and not model.get("booster_b64")):
         def predict_logistic(bars: list) -> Optional[float]:
-            return ml_entry.predict_proba(bars, model)  # cheap, no booster
+            return ml_entry.predict_proba(bars, model, htf_bars)  # cheap, no booster
         return predict_logistic
 
     b64 = model.get("booster_b64")
@@ -61,7 +65,7 @@ def _make_ml_predictor(model: dict) -> Optional[Callable[[list], Optional[float]
         return None
 
     def predict_tree(bars: list) -> Optional[float]:
-        row = ml_entry._latest_features(bars, model)
+        row = ml_entry._latest_features(bars, model, htf_bars)
         if row is None:
             return None
         try:
@@ -167,8 +171,16 @@ def run_backtest(
     ml_cfg = config.get("ml") or {}
     predictor: Optional[Callable] = None
     threshold = float(ml_cfg.get("threshold", 0.58))
+    # Combo mode defaults to a stricter floor (0.62) and a 2-bar confirm
+    # requirement unless explicitly overridden - same fallback rule as
+    # EntryManager._ml_signal, so backtests match live behavior.
+    combo_threshold = (
+        float(ml_cfg.get("combo_threshold") or max(threshold, 0.62))
+        if mode == "indicators_ml" else threshold
+    )
+    ml_confirm_need = max(1, int(ml_cfg.get("confirm_bars") or (2 if mode == "indicators_ml" else 1)))
     if mode in ("ml", "indicators_ml"):
-        predictor = _make_ml_predictor(ml_cfg.get("model") or {})
+        predictor = _make_ml_predictor(ml_cfg.get("model") or {}, trend_bars)
         if predictor is None:
             raise ValueError("Chưa có mô hình ML đã huấn luyện trong cấu hình.")
 
@@ -201,6 +213,8 @@ def run_backtest(
     confirm_need = max(1, int(config.get("confirm_bars") or 1))
     streak_side: Optional[str] = None
     streak_count = 0
+    ml_streak_side: Optional[str] = None
+    ml_streak_count = 0
 
     for i in range(MIN_WARMUP, n - 1):
         window = bars[max(0, i - SIGNAL_WINDOW + 1):i + 1]
@@ -222,19 +236,33 @@ def run_backtest(
                 proba = predictor(window)
                 ml_side = None
                 if proba is not None:
-                    if proba >= threshold:
+                    if proba >= combo_threshold:
                         ml_side = "BUY"
-                    elif proba <= 1 - threshold:
+                    elif proba <= 1 - combo_threshold:
                         ml_side = "SELL"
-                if ml_side != side:
+                if ml_side is not None and ml_side == ml_streak_side:
+                    ml_streak_count += 1
+                elif ml_side is not None:
+                    ml_streak_side, ml_streak_count = ml_side, 1
+                else:
+                    ml_streak_side, ml_streak_count = None, 0
+                if ml_side != side or ml_streak_count < ml_confirm_need:
                     side = None
         else:  # ml
             proba = predictor(window)
+            ml_side = None
             if proba is not None:
                 if proba >= threshold:
-                    side = "BUY"
+                    ml_side = "BUY"
                 elif proba <= 1 - threshold:
-                    side = "SELL"
+                    ml_side = "SELL"
+            if ml_side is not None and ml_side == ml_streak_side:
+                ml_streak_count += 1
+            elif ml_side is not None:
+                ml_streak_side, ml_streak_count = ml_side, 1
+            else:
+                ml_streak_side, ml_streak_count = None, 0
+            side = ml_side if ml_streak_count >= ml_confirm_need else None
 
         if side is None:
             continue
