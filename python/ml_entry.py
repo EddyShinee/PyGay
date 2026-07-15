@@ -7,6 +7,9 @@ JSON-serialisable dict stored inside the account entry config (Supabase JSONB).
 Feature set (see `feature_names()`):
   - lagged returns, RSI, MACD-hist/EMA-gap, Bollinger-z, momentum
   - candle microstructure (range/body/wicks), ATR%, volume z-score
+    (`vol_z` - MT4's `tick_volume` is the number of price changes in the
+    bar, NOT real traded/contract volume, which forex brokers don't expose;
+    treat it as a quote-update-frequency / activity proxy, not true volume)
   - Stochastic %K, CCI, Williams %R, ADX/+-DI, candlestick pattern score
   - hour-of-day / day-of-week (sin/cos) + trading-session flags
   - higher-timeframe EMA(200) distance/direction (optional `htf_bars`)
@@ -91,6 +94,8 @@ def feature_names(lags: int) -> list[str]:
 
 
 def _safe_vol(bar: dict) -> float:
+    # tick_volume = MT4's per-bar quote-update count, not real traded
+    # volume (forex has no centralized volume feed) - see module docstring.
     v = bar.get("tick_volume")
     if v is None:
         v = bar.get("volume")
@@ -735,6 +740,52 @@ def _tree_predict_proba(model, X):
         return model.predict_proba(X)
 
 
+def _walkforward_accuracy(X: list, y: list, algo: str, p: dict,
+                          n_folds: int = 3) -> Optional[dict]:
+    """Rolling-origin (expanding-window) out-of-sample accuracy: train on an
+    ever-growing chronological prefix, validate on the next chunk, repeat
+    n_folds times and average. A single chronological holdout (_chrono_split)
+    can look good or bad purely by luck of which tail slice it lands on -
+    this gives a materially more trustworthy read on whether the model has
+    real skill before it's trusted as a "confirm if proba >= threshold"
+    filter. Report-only: does not change the model actually deployed
+    (that's still trained once on the full dataset, as before)."""
+    n = len(X)
+    chunk = n // (n_folds + 1)
+    if chunk < 30:
+        return None
+    accuracies: list[float] = []
+    for k in range(1, n_folds + 1):
+        split = chunk * k
+        val_end = min(n, split + chunk)
+        if val_end <= split:
+            break
+        Xf_train, yf_train = X[:split], y[:split]
+        Xf_val, yf_val = X[split:val_end], y[split:val_end]
+        if len(Xf_train) < 30 or len(Xf_val) < 5:
+            continue
+        try:
+            if algo == "logistic":
+                fitted = _train_logistic(
+                    Xf_train, yf_train, Xf_val, yf_val,
+                    epochs=int(p["epochs"]), lr=float(p["lr"]), l2=float(p["l2"]),
+                )
+            elif algo == "xgboost":
+                fitted = _train_xgboost(Xf_train, yf_train, Xf_val, yf_val, p)
+            else:
+                fitted = _train_lightgbm(Xf_train, yf_train, Xf_val, yf_val, p)
+        except Exception:
+            continue
+        accuracies.append(fitted["val_accuracy"])
+    if not accuracies:
+        return None
+    return {
+        "accuracy": round(sum(accuracies) / len(accuracies), 4),
+        "folds": len(accuracies),
+        "per_fold": accuracies,
+    }
+
+
 def train(bars: list[dict], params: Optional[dict] = None,
          htf_bars: Optional[list[dict]] = None) -> dict:
     """Fit a classifier. Returns a serialisable model dict.
@@ -770,6 +821,11 @@ def train(bars: list[dict], params: Optional[dict] = None,
     accuracy = fitted["val_accuracy"] if has_holdout else fitted["train_accuracy"]
     up_rate = round(sum(y) / len(y), 4)
 
+    # Extra diagnostic, not used for the deployed model: 3 rolling-origin
+    # folds instead of one holdout, so the reported accuracy isn't just
+    # however the model happened to do on one particular tail slice.
+    wf = _walkforward_accuracy(X, y, algo, p)
+
     return {
         "version": MODEL_VERSION,
         "algo": fitted["algo"],
@@ -790,6 +846,8 @@ def train(bars: list[dict], params: Optional[dict] = None,
         "accuracy": accuracy,
         "train_accuracy": fitted["train_accuracy"],
         "val_accuracy": fitted["val_accuracy"] if has_holdout else None,
+        "walkforward_accuracy": wf["accuracy"] if wf else None,
+        "walkforward_folds": wf["folds"] if wf else 0,
         "up_rate": up_rate,
         "trained_at": int(time.time()),
     }

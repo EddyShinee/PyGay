@@ -16,6 +16,7 @@ input int    InpPositionsIntervalMs = 1000;
 input int    InpMagicNumber         = 123456;
 input bool   InpStreamWatchSymbols  = true;  // stream prices for ALL Market Watch symbols
 input int    InpPricesIntervalMs    = 500;   // how often to push Market Watch prices
+input int    InpSlippage            = 3;     // max acceptable slippage, in points
 
 CSocket  g_socket;
 string   g_rx_buffer = "";
@@ -24,7 +25,6 @@ uint     g_last_positions_ms = 0;
 uint     g_last_prices_ms = 0;
 int      g_last_history_total = 0;
 int      g_magic = 0;
-int      g_slippage = 3;
 
 string LastOrderError()
 {
@@ -69,7 +69,7 @@ bool CloseOrderTicket(const int ticket)
       double price = (OrderType() == OP_BUY)
                      ? MarketInfo(symbol, MODE_BID)
                      : MarketInfo(symbol, MODE_ASK);
-      if(OrderClose(ticket, OrderLots(), price, g_slippage, clrNONE))
+      if(OrderClose(ticket, OrderLots(), price, InpSlippage, clrNONE))
          return true;
       Print("SocketBridgeEA: OrderClose #", ticket, " attempt ", attempt + 1,
             "/3 failed - ", LastOrderError());
@@ -330,7 +330,6 @@ bool ExecuteMarketOrder(const string side, const string symbol, const double vol
    // Make sure the symbol is in the Market Watch so quotes are available;
    // lets us trade any ticker from a single chart.
    SymbolSelect(symbol, true);
-   RefreshRates();
    int type = (side == "BUY") ? OP_BUY : OP_SELL;
    if(side != "BUY" && side != "SELL")
    {
@@ -340,14 +339,31 @@ bool ExecuteMarketOrder(const string side, const string symbol, const double vol
 
    string order_comment = (comment == "") ? "SocketBridgeEA" : comment;
    double use_volume = NormalizeVolume(symbol, volume);
-   double use_sl = sl, use_tp = tp;
-   ClampStops(symbol, side, use_sl, use_tp);
-   double price = (type == OP_BUY)
-                  ? MarketInfo(symbol, MODE_ASK)
-                  : MarketInfo(symbol, MODE_BID);
-   out_ticket = OrderSend(symbol, type, use_volume, price, g_slippage, use_sl, use_tp,
-                          order_comment, g_magic, 0, clrNONE);
-   return (out_ticket > 0);
+
+   // A market order can be rejected by the same transient broker conditions
+   // as a close (requote, off-quotes, trade-context-busy, stale price) -
+   // retry a few times with a fresh price before giving up, mirroring
+   // CloseOrderTicket(). Safe to retry: OrderSend() is synchronous, so a
+   // failed attempt is guaranteed to NOT have opened a position - retrying
+   // can't double-fill.
+   for(int attempt = 0; attempt < 3; attempt++)
+   {
+      if(attempt > 0)
+         Sleep(300);
+      RefreshRates();
+      double use_sl = sl, use_tp = tp;
+      ClampStops(symbol, side, use_sl, use_tp);
+      double price = (type == OP_BUY)
+                     ? MarketInfo(symbol, MODE_ASK)
+                     : MarketInfo(symbol, MODE_BID);
+      out_ticket = OrderSend(symbol, type, use_volume, price, InpSlippage, use_sl, use_tp,
+                             order_comment, g_magic, 0, clrNONE);
+      if(out_ticket > 0)
+         return true;
+      Print("SocketBridgeEA: OrderSend ", side, " ", symbol, " attempt ", attempt + 1,
+            "/3 failed - ", LastOrderError());
+   }
+   return false;
 }
 
 void SendOrderResult(const string id, const bool ok, const int ticket, const string error,

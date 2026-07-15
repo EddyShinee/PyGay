@@ -9,8 +9,12 @@ config can be tuned on evidence instead of guesswork.
 Realism choices:
   - signals are computed on closed bars only, one entry max per bar
     (matches the live once-per-bar gate);
-  - entry price = next bar's open, +spread (from the bar's own spread
-    field) for BUY - the cost a market order actually pays;
+  - entry price = next bar's open, +spread for BUY - the cost a market
+    order actually pays. The spread comes from the bar's own `spread`
+    field when nonzero (e.g. MT5 history, which has a real per-bar spread),
+    otherwise falls back to `config["assumed_spread_points"]` - MT4/MQL4
+    has no historical-spread API, so every MT4-sourced bar carries
+    spread=0 and would otherwise silently backtest a zero-spread broker;
   - if a bar's range touches both SL and TP, it counts as SL (conservative);
   - only_if_flat is honored: no new entry while a simulated one is open.
 
@@ -19,7 +23,11 @@ Limitations (documented, deliberate):
     (one bar series per run);
   - trade_hours uses bar timestamps, which are broker-server time - treat
     the window as approximate;
-  - no swap/commission modeling; results are in points, not USD.
+  - no swap/commission modeling; results are in points, not USD, and
+    commission is inherently a currency amount (depends on contract size /
+    account currency) that doesn't have a clean points-based equivalent -
+    modeling it properly would need the P&L to be reworked into USD terms,
+    which is a separate, bigger change than the spread-assumption fix above.
 """
 from __future__ import annotations
 
@@ -206,7 +214,15 @@ def run_backtest(
     highs = [float(b["high"]) for b in bars]
     lows = [float(b["low"]) for b in bars]
     closes = [float(b["close"]) for b in bars]
-    spreads = [float(b.get("spread") or 0) for b in bars]
+    # MT4 (MQL4) has no historical-spread API - every bar the EA sends comes
+    # with spread=0, so a backtest run against MT4-sourced history would
+    # otherwise silently assume a perfectly zero-spread broker on every
+    # trade (inflating win rate / profit factor). `assumed_spread_points`
+    # lets the caller supply a realistic flat estimate instead; a bar that
+    # DOES carry a real nonzero spread (e.g. MT5 history, which has a true
+    # per-bar spread field) still takes priority over the assumption.
+    assumed_spread_pts = max(0.0, float(config.get("assumed_spread_points") or 0))
+    spreads = [float(b.get("spread") or 0) or assumed_spread_pts for b in bars]
 
     # Each enabled indicator's full BUY/SELL/None series, computed ONCE over
     # the whole `bars` array (not re-scanned on a trailing window per bar -

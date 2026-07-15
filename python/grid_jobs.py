@@ -8,6 +8,7 @@ configured direction *and* `delay_seconds` have elapsed since the last
 order in that job.
 """
 import logging
+import math
 import time
 import uuid
 from dataclasses import dataclass
@@ -16,6 +17,19 @@ from models import format_order_comment
 from trade_gateway import TradeGateway
 
 logger = logging.getLogger("grid_jobs")
+
+
+def pip_multiplier(point: float) -> float:
+    """How many points make up one pip, inferred from the symbol's tick
+    size. 5-digit/3-digit ("fractional pip") quotes use 10 points per pip
+    (e.g. EURUSD point=0.00001); 4-digit/2-digit quotes use 1 point per pip
+    (e.g. EURUSD point=0.0001, most JPY pairs point=0.01). A flat x10 is
+    only correct for the 5-digit case - this was previously hardcoded and
+    silently wrong for JPY/2-digit-quote symbols."""
+    if point is None or point <= 0:
+        return 10.0
+    digits = round(-math.log10(point))
+    return 10.0 if digits % 2 == 1 else 1.0
 
 
 @dataclass

@@ -1172,6 +1172,10 @@
               <label class="tab-field"><span>Số nến lịch sử</span><input id="btBars" type="number" step="500" min="200" max="5000" value="1500" /></label>
               <label class="tab-field"><span>Symbol (trống = symbol đầu)</span><input id="btSymbol" type="text" placeholder="tự động" /></label>
             </div>
+            <div class="tab-row">
+              <label class="tab-field"><span>Spread giả định (points)</span><input id="btSpread" type="number" step="1" min="0" value="0" /></label>
+            </div>
+            <p class="tab-hint" style="margin-top:-4px">MT4 không lưu spread lịch sử (luôn = 0) — nhập spread trung bình thực tế của sàn để kết quả backtest không bị ảo do bỏ qua chi phí spread.</p>
             <div class="tab-actions">
               <button onclick="withButtonLoading(this, runEntryBacktest)">Chạy backtest với cấu hình đang nhập</button>
             </div>
@@ -2977,10 +2981,12 @@ function renderMlStatus(ml) {
     const acc = model.accuracy != null ? (model.accuracy * 100).toFixed(1) + '%' : '—';
     const trainAcc = model.train_accuracy != null ? (model.train_accuracy * 100).toFixed(1) + '%' : null;
     const valAcc = model.val_accuracy != null ? (model.val_accuracy * 100).toFixed(1) + '%' : null;
+    const wfAcc = model.walkforward_accuracy != null ? (model.walkforward_accuracy * 100).toFixed(1) + '%' : null;
     if (badge) badge.textContent = `${algo} ${acc}`;
     let detail = `Đã huấn luyện ${when} · ${algo} · ${model.samples || '?'} mẫu`;
     if (valAcc) detail += ` · hold-out ${valAcc}`;
     if (trainAcc) detail += ` · train ${trainAcc}`;
+    if (wfAcc) detail += ` · walk-forward ${wfAcc} (${model.walkforward_folds || 0} fold — đáng tin hơn hold-out đơn lẻ)`;
     detail += ` · dự báo ${model.lookahead} nến.`;
     if (line) line.textContent = detail;
   } else {
@@ -3334,8 +3340,10 @@ async function saveEntryConfig() {
 async function runEntryBacktest() {
   if (!currentAccountId) return;
   try {
+    const config = collectEntryConfig();
+    config.assumed_spread_points = parseFloat(document.getElementById('btSpread').value) || 0;
     const body = {
-      config: collectEntryConfig(),
+      config,
       symbol: document.getElementById('btSymbol').value.trim() || null,
       bars_count: parseInt(document.getElementById('btBars').value) || 1500,
     };

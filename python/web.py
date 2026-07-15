@@ -18,7 +18,7 @@ from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from session_manager import SessionManager, AccountSession
 import account_links
@@ -50,13 +50,13 @@ def _read_static(name: str) -> HTMLResponse:
 class OrderRequest(BaseModel):
     symbol: str
     side: Literal["BUY", "SELL"]
-    volume: float
-    sl_points: float = 0
-    tp_points: float = 0
-    count: int = 1
-    spacing_points: float = 0
+    volume: float = Field(..., gt=0)
+    sl_points: float = Field(0, ge=0)
+    tp_points: float = Field(0, ge=0)
+    count: int = Field(1, ge=1, le=50)
+    spacing_points: float = Field(0, ge=0)
     direction: Literal["against", "with"] = "against"
-    delay_seconds: float = 0
+    delay_seconds: float = Field(0, ge=0)
     lot_mode: Literal["none", "add", "multiply"] = "none"
     lot_value: float = 0
 
@@ -84,7 +84,7 @@ class MagicRequest(BaseModel):
 class HistoryFetchRequest(BaseModel):
     symbol: str
     timeframe: Literal["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1"] = "M1"
-    count: int = 1000
+    count: int = Field(1000, ge=1, le=20000)
 
 
 class TelegramConfigRequest(BaseModel):
@@ -141,15 +141,15 @@ class EntryConfigRequest(BaseModel):
     symbol: str = "XAUUSD"  # legacy single symbol (kept for back-compat)
     symbols: list[str] = []  # preferred: list of symbols to scan
     side: Literal["BUY", "SELL", "BOTH"] = "BUY"
-    volume: float = 0.01
+    volume: float = Field(0.01, gt=0)
     sltp_unit: Literal["points", "pips"] = "points"
-    sl_distance: Optional[float] = None
-    tp_distance: Optional[float] = None
-    cooldown_seconds: float = 60.0
-    max_open_positions: Optional[int] = None
-    max_entries_per_day: Optional[int] = None
+    sl_distance: Optional[float] = Field(None, ge=0)
+    tp_distance: Optional[float] = Field(None, ge=0)
+    cooldown_seconds: float = Field(60.0, ge=0)
+    max_open_positions: Optional[int] = Field(None, ge=0)
+    max_entries_per_day: Optional[int] = Field(None, ge=0)
     only_if_flat: bool = False
-    max_spread_points: Optional[float] = None
+    max_spread_points: Optional[float] = Field(None, ge=0)
     # {"enabled": bool, "timeframe": "H4", "ema_period": 200}
     trend_filter: dict[str, Any] = {}
     trade_hours: Optional[str] = None  # "HH:MM-HH:MM" local, None = 24/7
@@ -159,12 +159,12 @@ class EntryConfigRequest(BaseModel):
     ] = "schedule"
     schedule_time: Optional[str] = None
     price_trigger: Optional[float] = None
-    interval_minutes: Optional[int] = None
+    interval_minutes: Optional[int] = Field(None, ge=0)
     indicator_timeframe: str = "H1"
     indicator_logic: Literal["all", "any", "majority", "threshold"] = "all"
-    indicator_min_agree: int = 2
-    indicator_min_margin: int = 1
-    confirm_bars: int = 1
+    indicator_min_agree: int = Field(2, ge=1)
+    indicator_min_margin: int = Field(1, ge=1)
+    confirm_bars: int = Field(1, ge=1)
     indicators: dict[str, Any] = {}
     ml: dict[str, Any] = {}
 
@@ -178,15 +178,17 @@ class BacktestRequest(BaseModel):
 class MLTrainRequest(BaseModel):
     symbol: str = "XAUUSD"
     timeframe: str = "H1"
-    count: int = 3000
-    lookahead: int = 3
-    lags: int = 5
-    threshold: float = 0.58
-    epochs: int = 400
+    # Upper bound matches the EA sending bars one socket message at a time -
+    # tens of thousands risks the 30s history_gateway timeout.
+    count: int = Field(3000, ge=200, le=20000)
+    lookahead: int = Field(3, ge=1, le=50)
+    lags: int = Field(5, ge=1, le=20)
+    threshold: float = Field(0.58, gt=0.5, lt=1)
+    epochs: int = Field(400, ge=10, le=5000)
     algo: Literal["logistic", "xgboost", "lightgbm"] = "xgboost"
-    n_estimators: int = 400
-    max_depth: int = 4
-    learning_rate: float = 0.05
+    n_estimators: int = Field(400, ge=10, le=2000)
+    max_depth: int = Field(4, ge=2, le=12)
+    learning_rate: float = Field(0.05, gt=0, le=1)
 
 
 class ManageConfigRequest(BaseModel):
@@ -992,6 +994,8 @@ def create_app(sessions: SessionManager) -> FastAPI:
             "accuracy": model["accuracy"],
             "train_accuracy": model.get("train_accuracy"),
             "val_accuracy": model.get("val_accuracy"),
+            "walkforward_accuracy": model.get("walkforward_accuracy"),
+            "walkforward_folds": model.get("walkforward_folds"),
             "up_rate": model["up_rate"],
             "trained_at": model["trained_at"],
             "feature_names": model["feature_names"],

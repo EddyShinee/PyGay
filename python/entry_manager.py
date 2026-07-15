@@ -14,7 +14,7 @@ import account_entry
 import indicators
 import ml_entry
 import telegram_notify
-from grid_jobs import sl_tp_from_points
+from grid_jobs import pip_multiplier, sl_tp_from_points
 from models import format_order_comment
 
 if TYPE_CHECKING:
@@ -105,6 +105,26 @@ class EntryConfig:
     # plus runtime knobs: { enabled, timeframe, threshold, model: {...} }
     ml: dict = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        """Defense-in-depth: web.py validates fresh writes, but a config
+        loaded straight from Supabase (reload_config) skips that Pydantic
+        layer entirely - a stale row saved before validation existed, or one
+        edited directly in the DB, could carry a value that would place a
+        dangerous order (e.g. a negative sl_distance flips the stop onto the
+        profit side instead of being rejected). Clamp rather than raise so a
+        bad value degrades to "no stop"/"default" instead of blocking
+        startup or crashing evaluate()."""
+        if self.volume is None or self.volume <= 0:
+            self.volume = 0.01
+        if self.sl_distance is not None and self.sl_distance < 0:
+            self.sl_distance = None
+        if self.tp_distance is not None and self.tp_distance < 0:
+            self.tp_distance = None
+        if self.cooldown_seconds is None or self.cooldown_seconds < 0:
+            self.cooldown_seconds = 0.0
+        if self.confirm_bars is None or self.confirm_bars < 1:
+            self.confirm_bars = 1
+
     @classmethod
     def from_dict(cls, data: Optional[dict]) -> "EntryConfig":
         if not data:
@@ -170,6 +190,13 @@ class _SymState:
     # Monotonic Entry comment sequence for this symbol (survives restarts via
     # reseeding from open tickets; never reused when a ticket is closed).
     entry_seq: int = 0
+    # Serializes evaluate() for this symbol: the tick handler and the 1s
+    # supervisor loop both call evaluate() independently, and `acting` alone
+    # doesn't close the race because it isn't set until deep inside
+    # _execute_entry(), after several awaits (bars fetch, indicator/ML,
+    # trend filter) - two concurrent calls could both pass the guards before
+    # either sets it, sending two orders for the same signal.
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 class EntryManager:
@@ -229,8 +256,10 @@ class EntryManager:
         except Exception:
             logger.debug("[%s] watch_symbol(%s) failed", self.account_id, symbol)
 
-    def _unit_factor(self) -> float:
-        return 10.0 if (self.config.sltp_unit or "points").lower() == "pips" else 1.0
+    def _unit_factor(self, point: float) -> float:
+        if (self.config.sltp_unit or "points").lower() != "pips":
+            return 1.0
+        return pip_multiplier(point)
 
     async def reload_config(self) -> None:
         try:
@@ -376,45 +405,58 @@ class EntryManager:
         if not self._guards_ok(cfg, symbol):
             return
 
-        side = cfg.side
-        bar_ts: Optional[int] = None
-        mode = (cfg.trigger_mode or "").lower()
-        if mode == "indicators":
-            res = await self._indicator_signal(cfg, symbol, st)
-            if not res:
+        # Everything from here on decides whether to send an order, so it
+        # must run for at most one evaluate() call per symbol at a time -
+        # see the comment on _SymState.lock. Another evaluate() for this
+        # symbol may have already run (and changed acting/cooldown/guard
+        # state) while we were waiting for the lock, so re-check.
+        async with st.lock:
+            if st.acting:
                 return
-            side, reason, bar_ts = res
-        elif mode == "ml":
-            res = await self._ml_signal(cfg, symbol, st)
-            if not res:
+            if time.monotonic() - st.last_entry_ts < cfg.cooldown_seconds:
                 return
-            side, reason, bar_ts = res
-        elif mode == "indicators_ml":
-            # ML acts as a confirmation filter: indicators AND the model must
-            # agree on the same direction before we enter.
-            res_ind = await self._indicator_signal(cfg, symbol, st)
-            res_ml = await self._ml_signal(cfg, symbol, st)
-            if not res_ind or not res_ml:
-                return
-            if res_ind[0] != res_ml[0]:
-                return
-            side = res_ind[0]
-            reason = f"Chỉ báo + ML cùng {side} ({res_ml[1]})"
-            bar_ts = max(res_ind[2] or 0, res_ml[2] or 0) or None
-        else:
-            reason = self._check_trigger(cfg, symbol, st, bid, ask, prev_bid, prev_ask)
-            if not reason:
+            if not self._guards_ok(cfg, symbol):
                 return
 
-        # One entry per closed bar: the same cross/oversold signal persists
-        # until the next bar closes, so don't re-enter on it after cooldown.
-        if bar_ts is not None and bar_ts == st.entered_bar_ts:
-            return
+            side = cfg.side
+            bar_ts: Optional[int] = None
+            mode = (cfg.trigger_mode or "").lower()
+            if mode == "indicators":
+                res = await self._indicator_signal(cfg, symbol, st)
+                if not res:
+                    return
+                side, reason, bar_ts = res
+            elif mode == "ml":
+                res = await self._ml_signal(cfg, symbol, st)
+                if not res:
+                    return
+                side, reason, bar_ts = res
+            elif mode == "indicators_ml":
+                # ML acts as a confirmation filter: indicators AND the model must
+                # agree on the same direction before we enter.
+                res_ind = await self._indicator_signal(cfg, symbol, st)
+                res_ml = await self._ml_signal(cfg, symbol, st)
+                if not res_ind or not res_ml:
+                    return
+                if res_ind[0] != res_ml[0]:
+                    return
+                side = res_ind[0]
+                reason = f"Chỉ báo + ML cùng {side} ({res_ml[1]})"
+                bar_ts = max(res_ind[2] or 0, res_ml[2] or 0) or None
+            else:
+                reason = self._check_trigger(cfg, symbol, st, bid, ask, prev_bid, prev_ask)
+                if not reason:
+                    return
 
-        if not await self._trend_allows(cfg, symbol, side if side in ("BUY", "SELL") else "BUY"):
-            return
+            # One entry per closed bar: the same cross/oversold signal persists
+            # until the next bar closes, so don't re-enter on it after cooldown.
+            if bar_ts is not None and bar_ts == st.entered_bar_ts:
+                return
 
-        await self._execute_entry(cfg, symbol, st, bid, ask, point, reason, side, bar_ts)
+            if not await self._trend_allows(cfg, symbol, side if side in ("BUY", "SELL") else "BUY"):
+                return
+
+            await self._execute_entry(cfg, symbol, st, bid, ask, point, reason, side, bar_ts)
 
     def _guards_ok(self, cfg: EntryConfig, symbol: str) -> bool:
         positions = self._session.store.snapshot()
@@ -711,7 +753,7 @@ class EntryManager:
         st.last_trigger = reason
         try:
             price = ask if side == "BUY" else bid
-            unit = self._unit_factor()
+            unit = self._unit_factor(point)
             sl_pts = (cfg.sl_distance or 0) * unit
             tp_pts = (cfg.tp_distance or 0) * unit
             # Absolute SL/TP from our latest tick = fallback for older EAs;

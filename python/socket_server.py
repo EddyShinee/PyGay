@@ -146,8 +146,12 @@ class SocketServer:
             worker.cancel()
             try:
                 await worker
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
                 pass
+            except Exception:
+                # Not the expected cancellation - a real bug in a queued
+                # handler would otherwise vanish silently here.
+                logger.exception("client worker raised on shutdown: %s", client.address)
             if client in self._clients:
                 self._clients.remove(client)
             await client.close()

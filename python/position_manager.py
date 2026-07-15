@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Optional
 
 import account_manage
 import telegram_notify
-from grid_jobs import scaled_lot, sl_tp_from_points
+from grid_jobs import pip_multiplier, scaled_lot, sl_tp_from_points
 from models import format_order_comment
 
 if TYPE_CHECKING:
@@ -157,8 +157,10 @@ class PositionManager:
     def account_id(self) -> str:
         return self._session.account_id
 
-    def _unit_factor(self) -> float:
-        return 10.0 if (self.config.sltp_unit or "points").lower() == "pips" else 1.0
+    def _unit_factor(self, point: float) -> float:
+        if (self.config.sltp_unit or "points").lower() != "pips":
+            return 1.0
+        return pip_multiplier(point)
 
     async def reload_config(self) -> None:
         try:
@@ -325,7 +327,7 @@ class PositionManager:
         if m_primary is None:
             return False
 
-        unit = self._unit_factor()
+        unit = self._unit_factor(point)
         move = (cur - st.ref_price) if side == "BUY" else (st.ref_price - cur)
         move_points = move / point  # >0 = favorable, <0 = adverse
 
@@ -463,7 +465,7 @@ class PositionManager:
 
     async def _trail_basket(self, symbol: str, side: str, cur: float, point: float) -> None:
         """Move every basket ticket's SL to lock in profit (best-effort)."""
-        offset = self.config.pyr_trail_points * self._unit_factor() * point
+        offset = self.config.pyr_trail_points * self._unit_factor(point) * point
         sl = cur - offset if side == "BUY" else cur + offset
         for p in [p for p in self._managed_positions(symbol) if p.get("side") == side]:
             try:
