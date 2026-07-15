@@ -30,9 +30,11 @@ from typing import Callable, Optional
 import indicators
 import ml_entry
 
-# Live EntryManager fetches 300 bars for signals - use the same window so
-# indicator values match what the live system would compute.
-SIGNAL_WINDOW = 300
+# Indicators are precomputed once over the whole `bars` array (see
+# indicators.indicator_signal_series) - no windowing needed for them. The
+# ML predictor still needs a bounded lookback per bar, matching the same
+# 300-bar window the live EntryManager fetches for its feature builder.
+ML_SIGNAL_WINDOW = 300
 MIN_WARMUP = 60
 MAX_BARS = 5000
 # When no TP/SL configured, exit at close this many bars after entry.
@@ -77,25 +79,22 @@ def _make_ml_predictor(
     return predict_tree
 
 
-def _indicator_side(cfg: dict, bars: list) -> Optional[str]:
-    """Same combination semantics as EntryManager._indicator_signal."""
-    cfg_inds = cfg.get("indicators") or {}
-    enabled = [
-        (key, params)
-        for key, params in cfg_inds.items()
-        if isinstance(params, dict) and params.get("enabled")
-    ]
-    if not enabled:
+def _indicator_side_at(cfg: dict, indicator_series: dict[str, list], i: int) -> Optional[str]:
+    """Same combination semantics as EntryManager._indicator_signal, but
+    reads from indicator series precomputed once over the whole bars array
+    (see indicator_series build-up in run_backtest) instead of recomputing
+    every indicator from scratch on a trailing window at every bar."""
+    if not indicator_series:
         return None
     buys = sells = 0
-    for key, params in enabled:
-        sig = indicators.indicator_signal(key, bars, params)
+    for series in indicator_series.values():
+        sig = series[i]
         if sig == "BUY":
             buys += 1
         elif sig == "SELL":
             sells += 1
     return indicators.combine_signals(
-        buys, sells, len(enabled),
+        buys, sells, len(indicator_series),
         cfg.get("indicator_logic") or "all",
         cfg.get("indicator_min_agree") or 1,
         cfg.get("indicator_min_margin") or 1,
@@ -205,6 +204,15 @@ def run_backtest(
     closes = [float(b["close"]) for b in bars]
     spreads = [float(b.get("spread") or 0) for b in bars]
 
+    # Each enabled indicator's full BUY/SELL/None series, computed ONCE over
+    # the whole `bars` array (not re-scanned on a trailing window per bar -
+    # that's what used to make backtests with several indicators slow).
+    indicator_series: dict[str, list] = {}
+    if mode in ("indicators", "indicators_ml"):
+        for key, params in (config.get("indicators") or {}).items():
+            if isinstance(params, dict) and params.get("enabled"):
+                indicator_series[key] = indicators.indicator_signal_series(key, bars, params)
+
     trades: list[dict] = []
     open_until = -1  # index of the bar the current simulated trade exits on
     signals_total = 0
@@ -217,11 +225,9 @@ def run_backtest(
     ml_streak_count = 0
 
     for i in range(MIN_WARMUP, n - 1):
-        window = bars[max(0, i - SIGNAL_WINDOW + 1):i + 1]
-
         side: Optional[str] = None
         if mode in ("indicators", "indicators_ml"):
-            side = _indicator_side(config, window)
+            side = _indicator_side_at(config, indicator_series, i)
             # Consecutive-bar confirmation applies to the INDICATOR verdict,
             # before ML gets a veto - same order as the live EntryManager.
             if side is not None and side == streak_side:
@@ -233,6 +239,9 @@ def run_backtest(
             if side is not None and streak_count < confirm_need:
                 side = None
             if side is not None and mode == "indicators_ml":
+                # Only the ML predictor needs a bounded lookback window -
+                # build it lazily, right when it's actually going to be used.
+                window = bars[max(0, i - ML_SIGNAL_WINDOW + 1):i + 1]
                 proba = predictor(window)
                 ml_side = None
                 if proba is not None:
@@ -249,6 +258,7 @@ def run_backtest(
                 if ml_side != side or ml_streak_count < ml_confirm_need:
                     side = None
         else:  # ml
+            window = bars[max(0, i - ML_SIGNAL_WINDOW + 1):i + 1]
             proba = predictor(window)
             ml_side = None
             if proba is not None:
